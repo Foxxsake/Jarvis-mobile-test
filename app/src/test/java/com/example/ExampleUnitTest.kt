@@ -32,7 +32,7 @@ class CommandParserTest {
         val result = parser.parse("text Alice Hello there")
         assertEquals(CommandCategory.COMMUNICATION, result.category)
         assertEquals("alice", result.targetAppOrPerson)
-        assertEquals("hello there", result.messageOrQuery)
+        assertEquals("Hello there", result.messageOrQuery)
         assertTrue(result.requiresApproval)
     }
 

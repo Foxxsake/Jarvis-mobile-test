@@ -9,7 +9,7 @@ class TaskRouter(private val toolRegistry: ToolRegistry) {
     fun route(command: ParsedCommand): ExecutionPlan {
         if (command.category == CommandCategory.DEVICE_ACTION) {
             val toolName = command.targetAppOrPerson?.lowercase() ?: ""
-            val tool = toolRegistry.getTools().find { it.name.lowercase() == toolName }
+            val tool = toolRegistry.tools.value.find { it.name.lowercase() == toolName }
             if (tool != null) {
                 return ExecutionPlan(
                     steps = listOf("Launch ${tool.name}"),

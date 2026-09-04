@@ -7,14 +7,25 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.ui.JarvisViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
+    val coroutineScope = rememberCoroutineScope()
+    
+    // Default to true while loading to be safe
+    val confirmationRequired by viewModel.settingsManager.confirmationRequiredFlow.collectAsState(initial = true)
+    val localProcessing by viewModel.settingsManager.localProcessingFlow.collectAsState(initial = true)
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -36,8 +47,15 @@ fun SettingsScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             SettingsSection(title = "CORE SAFETY") {
-                SettingsSwitchRow(label = "Never spend money automatically", checked = true, enabled = false)
-                SettingsSwitchRow(label = "Confirmation before consequential actions", checked = true, enabled = false)
+                SettingsSwitchRow(label = "Never spend money automatically", checked = true, enabled = false, onCheckedChange = {})
+                SettingsSwitchRow(
+                    label = "Confirmation before consequential actions",
+                    checked = confirmationRequired,
+                    enabled = true,
+                    onCheckedChange = {
+                        coroutineScope.launch { viewModel.settingsManager.setConfirmationRequired(it) }
+                    }
+                )
             }
             
             SettingsSection(title = "AI PREFERENCES") {
@@ -47,14 +65,21 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
 
             SettingsSection(title = "LOCAL ENGINE") {
-                SettingsSwitchRow(label = "Local command processing", checked = true, enabled = false)
+                SettingsSwitchRow(
+                    label = "Local command processing",
+                    checked = localProcessing,
+                    enabled = true,
+                    onCheckedChange = {
+                        coroutineScope.launch { viewModel.settingsManager.setLocalProcessing(it) }
+                    }
+                )
                 SettingsRow(label = "Token/quota tracking", value = "Placeholder")
             }
 
             SettingsSection(title = "SYSTEM INTEGRATION (FUTURE)") {
-                SettingsSwitchRow(label = "Wake word detection", checked = false, enabled = false)
-                SettingsSwitchRow(label = "Background assistant", checked = false, enabled = false)
-                SettingsSwitchRow(label = "Android accessibility integration", checked = false, enabled = false)
+                SettingsSwitchRow(label = "Wake word detection", checked = false, enabled = false, onCheckedChange = {})
+                SettingsSwitchRow(label = "Background assistant", checked = false, enabled = false, onCheckedChange = {})
+                SettingsSwitchRow(label = "Android accessibility integration", checked = false, enabled = false, onCheckedChange = {})
             }
 
             SettingsSection(title = "EXTERNAL TOOLS (FUTURE)") {
@@ -94,7 +119,7 @@ fun SettingsRow(label: String, value: String) {
 }
 
 @Composable
-fun SettingsSwitchRow(label: String, checked: Boolean, enabled: Boolean) {
+fun SettingsSwitchRow(label: String, checked: Boolean, enabled: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -103,6 +128,6 @@ fun SettingsSwitchRow(label: String, checked: Boolean, enabled: Boolean) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(text = label, style = MaterialTheme.typography.bodyLarge, color = if(enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha=0.6f))
-        Switch(checked = checked, onCheckedChange = null, enabled = enabled)
+        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
 }

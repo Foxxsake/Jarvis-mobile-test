@@ -1,14 +1,18 @@
 package com.example.ui
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.ActivityLog
 import com.example.data.ActivityRepository
+import com.example.data.SettingsManager
 import com.example.engine.CommandCategory
 import com.example.engine.CommandParser
 import com.example.engine.ParsedCommand
 import com.example.engine.TaskRouter
+import com.example.engine.ToolExecutor
 import com.example.engine.ToolRegistry
+import com.example.engine.ToolExecutionStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -24,8 +28,10 @@ data class JarvisUiState(
 
 class JarvisViewModel(
     private val repository: ActivityRepository,
+    val settingsManager: SettingsManager,
+    private val toolRegistry: ToolRegistry,
+    private val toolExecutor: ToolExecutor,
     private val commandParser: CommandParser = CommandParser(),
-    private val toolRegistry: ToolRegistry = ToolRegistry(),
     private val taskRouter: TaskRouter = TaskRouter(toolRegistry)
 ) : ViewModel() {
 
@@ -36,12 +42,12 @@ class JarvisViewModel(
             initialValue = emptyList()
         )
 
-    val tools = MutableStateFlow(toolRegistry.getTools()).asStateFlow()
+    val tools = toolRegistry.tools
 
     private val _uiState = MutableStateFlow(JarvisUiState())
     val uiState: StateFlow<JarvisUiState> = _uiState.asStateFlow()
 
-    fun processCommand(text: String, executeAction: (ParsedCommand) -> Unit) {
+    fun processCommand(text: String) {
         if (text.isBlank()) return
         
         _uiState.value = _uiState.value.copy(status = "Planning")
@@ -56,15 +62,15 @@ class JarvisViewModel(
                 planToApprove = plan.steps.joinToString("\n")
             )
         } else {
-            execute(parsed, plan.steps.joinToString(", "), executeAction)
+            execute(parsed, plan.steps.joinToString(", "))
         }
     }
 
-    fun approvePending(executeAction: (ParsedCommand) -> Unit) {
+    fun approvePending() {
         val pending = _uiState.value.pendingApproval
         val planText = _uiState.value.planToApprove
         if (pending != null) {
-            execute(pending, planText ?: "", executeAction)
+            execute(pending, planText ?: "")
         }
         clearApproval()
     }
@@ -85,15 +91,23 @@ class JarvisViewModel(
         )
     }
 
-    private fun execute(command: ParsedCommand, planText: String, executeAction: (ParsedCommand) -> Unit) {
+    private fun execute(command: ParsedCommand, planText: String) {
         if (command.category == CommandCategory.UNKNOWN) {
             logActivity(command, planText, "Skipped (Requires AI)")
             _uiState.value = _uiState.value.copy(status = "Ready")
             return
         }
 
-        executeAction(command)
-        logActivity(command, planText, "Executed")
+        val result = toolExecutor.executeAction(command)
+        val logStatus = when(result.status) {
+            ToolExecutionStatus.SUCCESS -> "Success"
+            ToolExecutionStatus.NOT_INSTALLED -> "Not Installed"
+            ToolExecutionStatus.UNSUPPORTED -> "Unsupported"
+            ToolExecutionStatus.FAILED -> "Failed"
+            ToolExecutionStatus.REQUIRES_CONNECTION -> "Requires Connection"
+        }
+
+        logActivity(command, planText, logStatus)
         _uiState.value = _uiState.value.copy(status = "Ready")
     }
 

@@ -231,23 +231,29 @@ fun HomeScreen(
                         color = MaterialTheme.colorScheme.background,
                         border = androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
                     ) {
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize().clickable { }) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                             Box(
                                 modifier = Modifier
                                     .size(56.dp)
-                                    .background(MaterialTheme.colorScheme.primary, CircleShape),
+                                    .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Mic,
-                                    contentDescription = "Speak Command",
+                                    contentDescription = "Voice setup coming next",
                                     modifier = Modifier.size(24.dp),
-                                    tint = MaterialTheme.colorScheme.onPrimary
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
                     }
                 }
+                Text(
+                    text = "Voice setup coming next",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
 
                 // Text Input
                 Row(
