@@ -60,7 +60,7 @@ class MainActivity : ComponentActivity() {
                 } else if (pendingPerm == "CONTACTS") {
                     val pendingCmd = vm.uiState.value.pendingApproval
                     if (pendingCmd != null) {
-                        vm.processCommand(pendingCmd.rawText)
+                        vm.submitCommand(pendingCmd.originalText)
                     }
                 }
             } else {
@@ -153,7 +153,7 @@ class MainActivity : ComponentActivity() {
                             HomeScreen(
                                 uiState = uiState,
                                 recentLogs = recentLogs,
-                                onCommandSubmit = { text -> viewModel.processCommand(text) },
+                                onCommandSubmit = { text -> viewModel.submitCommand(text) },
                                 onMicClick = {
                                     if (ContextCompat.checkSelfPermission(
                                             this@MainActivity,

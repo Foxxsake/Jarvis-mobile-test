@@ -1,0 +1,1 @@
+sed -i 's/val localProcessingEnabled = settingsManager.localProcessingEnabled/val localProcessingEnabled = settingsManager.localProcessingEnabled\n    val activityLogs = repository.allLogs\n    val tools = toolRegistry.tools/g' app/src/main/java/com/example/ui/JarvisViewModel.kt

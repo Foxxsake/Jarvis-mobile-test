@@ -6,7 +6,7 @@ import com.example.engine.contacts.ContactsProvider
 
 class ContactResolver(private val contactsProvider: ContactsProvider) {
 
-    suspend fun resolveCommandTarget(command: ParsedCommand): ContactResolutionResult {
+    suspend fun resolveCommandTarget(command: PlannedAction): ContactResolutionResult {
         if (!contactsProvider.hasPermission()) {
             return ContactResolutionResult.PermissionRequired
         }

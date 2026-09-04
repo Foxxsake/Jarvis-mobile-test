@@ -27,7 +27,7 @@ class ToolExecutor(
     private val contactResolver: ContactResolver
 ) {
     suspend fun executeAction(
-        command: ParsedCommand,
+        command: PlannedAction,
         resolvedResult: ContactResolutionResult? = null,
         isLocalProcessingEnabled: Boolean = true
     ): ToolExecutionResult {
@@ -72,7 +72,7 @@ class ToolExecutor(
         }
     }
 
-    private fun handleOpenApp(command: ParsedCommand): ToolExecutionResult {
+    private fun handleOpenApp(command: PlannedAction): ToolExecutionResult {
         val targetName = command.targetAppOrPerson ?: return ToolExecutionResult(ToolExecutionStatus.FAILED, "No target tool or app specified.")
 
         if (targetName.lowercase() == "settings") {
@@ -139,7 +139,7 @@ class ToolExecutor(
         return ToolExecutionResult(ToolExecutionStatus.FAILED, "Invalid tool configuration")
     }
 
-    private fun handleCheckGithub(command: ParsedCommand): ToolExecutionResult {
+    private fun handleCheckGithub(command: PlannedAction): ToolExecutionResult {
         val githubTool = toolRegistry.findTool("github")
         if (githubTool != null && githubTool.enabled && githubTool.installedOrAvailable) {
             val pkg = githubTool.installedPackageName ?: githubTool.packageNames.firstOrNull()
@@ -160,7 +160,7 @@ class ToolExecutor(
     }
 
     private suspend fun handleCommunication(
-        command: ParsedCommand,
+        command: PlannedAction,
         providedResolution: ContactResolutionResult?
     ): ToolExecutionResult {
         val resolution = providedResolution ?: contactResolver.resolveCommandTarget(command)

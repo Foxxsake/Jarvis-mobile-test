@@ -9,8 +9,7 @@ enum class CommandCategory {
     UNKNOWN
 }
 
-data class ParsedCommand(
-    val rawText: String,
+data class PlannedAction(
     val action: CommandAction,
     val category: CommandCategory,
     val targetAppOrPerson: String? = null,
@@ -19,3 +18,11 @@ data class ParsedCommand(
     val followUp: String? = null,
     val requiresApproval: Boolean
 )
+
+data class CommandPlan(
+    val originalText: String,
+    val actions: List<PlannedAction>
+) {
+    val requiresApproval: Boolean
+        get() = actions.any { it.requiresApproval }
+}

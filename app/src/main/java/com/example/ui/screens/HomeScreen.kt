@@ -31,7 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.ActivityLog
-import com.example.engine.ParsedCommand
+import com.example.engine.CommandPlan
 import com.example.engine.contacts.ContactCandidate
 import com.example.engine.contacts.ContactDestination
 import com.example.ui.JarvisUiState
@@ -497,7 +497,7 @@ fun HomeScreen(
 
 @Composable
 fun ApprovalCard(
-    command: ParsedCommand,
+    command: CommandPlan,
     planText: String,
     onApprove: () -> Unit,
     onReject: () -> Unit
@@ -523,7 +523,7 @@ fun ApprovalCard(
 
             Column(modifier = Modifier.padding(top = 8.dp)) {
                 Text(text = "Requested Action", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(text = command.rawText, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Text(text = command.originalText, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
 
                 if (planText.isNotBlank()) {
                     Spacer(modifier = Modifier.height(8.dp))

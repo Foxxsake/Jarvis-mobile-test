@@ -4,13 +4,67 @@ class CommandParser(
     private val approvalManager: ApprovalManager = ApprovalManager(),
     private val toolMatcher: ToolCommandMatcher = ToolCommandMatcher()
 ) {
-    fun parse(text: String): ParsedCommand {
+
+    fun parse(text: String): CommandPlan {
+        if (text.isBlank()) {
+            return CommandPlan(
+                originalText = text,
+                actions = listOf(
+                    PlannedAction(
+                        action = CommandAction.UNKNOWN,
+                        category = CommandCategory.UNKNOWN,
+                        requiresApproval = false
+                    )
+                )
+            )
+        }
+
+        val actions = mutableListOf<PlannedAction>()
+        var remainingText: String? = text.trim()
+
+        while (!remainingText.isNullOrBlank()) {
+            val parsedSingle = parseSingle(remainingText)
+
+            if (parsedSingle.action == CommandAction.UNKNOWN) {
+                if (actions.isNotEmpty()) {
+                    val last = actions.removeLast()
+                    actions.add(last.copy(
+                        followUp = (last.followUp?.let { "$it and " } ?: "") + remainingText,
+                        rawArguments = (last.rawArguments?.let { "$it and " } ?: "") + remainingText,
+                    ))
+                } else {
+                    actions.add(parsedSingle)
+                }
+                break
+            } else {
+                if (!parsedSingle.followUp.isNullOrBlank()) {
+                    val nextText = parsedSingle.followUp
+                    val actionWithoutFollowUp = parsedSingle.copy(followUp = null, rawArguments = null)
+
+                    val nextParsed = parseSingle(nextText)
+                    if (nextParsed.action != CommandAction.UNKNOWN) {
+                        actions.add(actionWithoutFollowUp)
+                        remainingText = nextText
+                    } else {
+                        actions.add(parsedSingle)
+                        break
+                    }
+                } else {
+                    actions.add(parsedSingle)
+                    break
+                }
+            }
+        }
+
+        return CommandPlan(originalText = text, actions = actions)
+    }
+
+    private fun parseSingle(text: String): PlannedAction {
         val trimmed = text.trim()
         val lower = trimmed.lowercase()
 
         if (lower == "open settings" || lower == "settings") {
-            return ParsedCommand(
-                rawText = text,
+            return PlannedAction(
                 action = CommandAction.OPEN_SETTINGS,
                 category = CommandCategory.DEVICE_ACTION,
                 targetAppOrPerson = "settings",
@@ -20,8 +74,7 @@ class CommandParser(
 
         if (lower.startsWith("call ")) {
             val target = trimmed.substring(5).trim()
-            return ParsedCommand(
-                rawText = text,
+            return PlannedAction(
                 action = CommandAction.CALL,
                 category = CommandCategory.COMMUNICATION,
                 targetAppOrPerson = target,
@@ -47,8 +100,7 @@ class CommandParser(
                 message = null
             }
 
-            return ParsedCommand(
-                rawText = text,
+            return PlannedAction(
                 action = action,
                 category = CommandCategory.COMMUNICATION,
                 targetAppOrPerson = target,
@@ -59,8 +111,7 @@ class CommandParser(
         }
 
         if (lower == "check github" || lower.startsWith("check github ")) {
-            return ParsedCommand(
-                rawText = text,
+            return PlannedAction(
                 action = CommandAction.CHECK_GITHUB,
                 category = CommandCategory.DEVELOPMENT,
                 targetAppOrPerson = "github",
@@ -70,8 +121,7 @@ class CommandParser(
         }
 
         if (lower.startsWith("build ")) {
-            return ParsedCommand(
-                rawText = text,
+            return PlannedAction(
                 action = CommandAction.BUILD,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = trimmed.substring(6).trim(),
@@ -80,8 +130,7 @@ class CommandParser(
         }
 
         if (lower.startsWith("work on ")) {
-            return ParsedCommand(
-                rawText = text,
+            return PlannedAction(
                 action = CommandAction.WORK_ON,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = trimmed.substring(8).trim(),
@@ -90,8 +139,7 @@ class CommandParser(
         }
 
         if (lower.startsWith("push ") || lower == "push") {
-            return ParsedCommand(
-                rawText = text,
+            return PlannedAction(
                 action = CommandAction.PUSH,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = trimmed.removePrefix("push").trim().ifBlank { null },
@@ -100,8 +148,7 @@ class CommandParser(
         }
 
         if (lower.startsWith("delete ")) {
-            return ParsedCommand(
-                rawText = text,
+            return PlannedAction(
                 action = CommandAction.DELETE,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = trimmed.substring(7).trim(),
@@ -110,8 +157,7 @@ class CommandParser(
         }
 
         if (lower.startsWith("overwrite ")) {
-            return ParsedCommand(
-                rawText = text,
+            return PlannedAction(
                 action = CommandAction.OVERWRITE,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = trimmed.substring(10).trim(),
@@ -120,8 +166,7 @@ class CommandParser(
         }
 
         if (lower.startsWith("run ")) {
-            return ParsedCommand(
-                rawText = text,
+            return PlannedAction(
                 action = CommandAction.RUN_COMMAND,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = trimmed.substring(4).trim(),
@@ -142,8 +187,7 @@ class CommandParser(
                 } else {
                     match.result.matchedTerm
                 }
-                return ParsedCommand(
-                    rawText = text,
+                return PlannedAction(
                     action = CommandAction.OPEN_APP,
                     category = CommandCategory.DEVICE_ACTION,
                     targetAppOrPerson = target,
@@ -153,8 +197,7 @@ class CommandParser(
                 )
             } else if (lower.startsWith("open ")) {
                 val target = trimmed.substring(5).trim()
-                return ParsedCommand(
-                    rawText = text,
+                return PlannedAction(
                     action = CommandAction.OPEN_APP,
                     category = CommandCategory.DEVICE_ACTION,
                     targetAppOrPerson = target,
@@ -171,8 +214,7 @@ class CommandParser(
             } else {
                 directMatch.result.matchedTerm
             }
-            return ParsedCommand(
-                rawText = text,
+            return PlannedAction(
                 action = CommandAction.OPEN_APP,
                 category = CommandCategory.DEVICE_ACTION,
                 targetAppOrPerson = target,
@@ -182,8 +224,7 @@ class CommandParser(
             )
         }
 
-        return ParsedCommand(
-            rawText = text,
+        return PlannedAction(
             action = CommandAction.UNKNOWN,
             category = CommandCategory.UNKNOWN,
             requiresApproval = false

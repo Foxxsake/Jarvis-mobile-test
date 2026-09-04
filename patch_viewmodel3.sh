@@ -1,0 +1,1 @@
+sed -i 's/val localProcessingEnabled = settingsManager.localProcessingEnabled/val localProcessingEnabled: StateFlow<Boolean> = settingsManager.localProcessingFlow.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, true)/g' app/src/main/java/com/example/ui/JarvisViewModel.kt

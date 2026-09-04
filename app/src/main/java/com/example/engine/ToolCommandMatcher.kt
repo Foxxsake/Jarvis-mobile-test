@@ -25,7 +25,9 @@ class ToolCommandMatcher(
     companion object {
         private val ACTION_PREFIXES = listOf("open ", "launch ", "start ", "go to ")
         private val FILLER_SUFFIXES = listOf(" please", " for me", " thanks")
-        private val CONJUNCTIONS = listOf(" and ", " then ", " to ")
+        private val CONJUNCTIONS = listOf(
+            " and then ", ", then ", " then ", ", and ", " and ", " to ", ", "
+        )
 
         fun levenshteinDistance(s1: String, s2: String): Int {
             val a = s1.lowercase()

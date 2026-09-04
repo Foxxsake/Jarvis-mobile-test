@@ -62,11 +62,11 @@ class JarvisEngineTest {
 
     @Test
     fun `open GitHub parsing`() {
-        val parsed = parser.parse("open GitHub")
-        assertEquals(CommandAction.OPEN_APP, parsed.action)
-        assertEquals(CommandCategory.DEVICE_ACTION, parsed.category)
-        assertEquals("GitHub", parsed.targetAppOrPerson)
-        assertFalse(parsed.requiresApproval)
+        val plan = parser.parse("open GitHub")
+        assertEquals(CommandAction.OPEN_APP, plan.actions.first().action)
+        assertEquals(CommandCategory.DEVICE_ACTION, plan.actions.first().category)
+        assertEquals("GitHub", plan.actions.first().targetAppOrPerson)
+        assertFalse(plan.actions.first().requiresApproval)
     }
 
     @Test
@@ -79,86 +79,86 @@ class JarvisEngineTest {
 
     @Test
     fun `multi-word CALL target preservation`() {
-        val parsed = parser.parse("call John Smith")
-        assertEquals(CommandAction.CALL, parsed.action)
-        assertEquals("John Smith", parsed.targetAppOrPerson)
-        assertTrue(parsed.requiresApproval)
+        val plan = parser.parse("call John Smith")
+        assertEquals(CommandAction.CALL, plan.actions.first().action)
+        assertEquals("John Smith", plan.actions.first().targetAppOrPerson)
+        assertTrue(plan.actions.first().requiresApproval)
     }
 
     @Test
     fun `text command without colon does not fake contact boundaries`() {
-        val parsed = parser.parse("text John Smith I'm running late")
-        assertEquals(CommandAction.TEXT, parsed.action)
-        assertNull(parsed.targetAppOrPerson)
-        assertNull(parsed.messageOrQuery)
-        assertEquals("John Smith I'm running late", parsed.rawArguments)
-        assertTrue(parsed.requiresApproval)
+        val plan = parser.parse("text John Smith I'm running late")
+        assertEquals(CommandAction.TEXT, plan.actions.first().action)
+        assertNull(plan.actions.first().targetAppOrPerson)
+        assertNull(plan.actions.first().messageOrQuery)
+        assertEquals("John Smith I'm running late", plan.actions.first().rawArguments)
+        assertTrue(plan.actions.first().requiresApproval)
     }
 
     @Test
     fun `explicit colon-delimited communication parsing`() {
-        val parsed = parser.parse("text John Smith: I'm running late")
-        assertEquals(CommandAction.TEXT, parsed.action)
-        assertEquals("John Smith", parsed.targetAppOrPerson)
-        assertEquals("I'm running late", parsed.messageOrQuery)
-        assertTrue(parsed.requiresApproval)
+        val plan = parser.parse("text John Smith: I'm running late")
+        assertEquals(CommandAction.TEXT, plan.actions.first().action)
+        assertEquals("John Smith", plan.actions.first().targetAppOrPerson)
+        assertEquals("I'm running late", plan.actions.first().messageOrQuery)
+        assertTrue(plan.actions.first().requiresApproval)
     }
 
     @Test
     fun `unresolved communication command returns CONTACT_RESOLUTION_REQUIRED`() = runTest {
-        val parsed = parser.parse("text John Smith I'm running late")
-        val result = toolExecutor.executeAction(parsed)
+        val plan = parser.parse("text John Smith I'm running late")
+        val result = toolExecutor.executeAction(plan.actions.first())
         assertEquals(ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED, result.status)
         assertTrue(result.message.isNotBlank())
     }
 
     @Test
     fun `safe app launch does not require approval`() {
-        val parsed = parser.parse("open github")
-        assertFalse(parsed.requiresApproval)
+        val plan = parser.parse("open github")
+        assertFalse(plan.actions.first().requiresApproval)
     }
 
     @Test
     fun `check GitHub does not require approval`() {
-        val parsed = parser.parse("check github")
-        assertEquals(CommandAction.CHECK_GITHUB, parsed.action)
-        assertFalse(parsed.requiresApproval)
+        val plan = parser.parse("check github")
+        assertEquals(CommandAction.CHECK_GITHUB, plan.actions.first().action)
+        assertFalse(plan.actions.first().requiresApproval)
     }
 
     @Test
     fun `push requires approval`() {
-        val parsed = parser.parse("push changes")
-        assertEquals(CommandAction.PUSH, parsed.action)
-        assertTrue(parsed.requiresApproval)
+        val plan = parser.parse("push changes")
+        assertEquals(CommandAction.PUSH, plan.actions.first().action)
+        assertTrue(plan.actions.first().requiresApproval)
     }
 
     @Test
     fun `delete requires approval`() {
-        val parsed = parser.parse("delete file.kt")
-        assertEquals(CommandAction.DELETE, parsed.action)
-        assertTrue(parsed.requiresApproval)
+        val plan = parser.parse("delete file.kt")
+        assertEquals(CommandAction.DELETE, plan.actions.first().action)
+        assertTrue(plan.actions.first().requiresApproval)
     }
 
     @Test
     fun `overwrite requires approval`() {
-        val parsed = parser.parse("overwrite main.kt")
-        assertEquals(CommandAction.OVERWRITE, parsed.action)
-        assertTrue(parsed.requiresApproval)
+        val plan = parser.parse("overwrite main.kt")
+        assertEquals(CommandAction.OVERWRITE, plan.actions.first().action)
+        assertTrue(plan.actions.first().requiresApproval)
     }
 
     @Test
     fun `destructive run command requires approval`() {
-        val parsed = parser.parse("run rm -rf .")
-        assertEquals(CommandAction.RUN_COMMAND, parsed.action)
-        assertTrue(parsed.requiresApproval)
+        val plan = parser.parse("run rm -rf .")
+        assertEquals(CommandAction.RUN_COMMAND, plan.actions.first().action)
+        assertTrue(plan.actions.first().requiresApproval)
     }
 
     @Test
     fun `unknown command handling`() {
-        val parsed = parser.parse("do something completely unhandled")
-        assertEquals(CommandAction.UNKNOWN, parsed.action)
-        assertEquals(CommandCategory.UNKNOWN, parsed.category)
-        assertFalse(parsed.requiresApproval)
+        val plan = parser.parse("do something completely unhandled")
+        assertEquals(CommandAction.UNKNOWN, plan.actions.first().action)
+        assertEquals(CommandCategory.UNKNOWN, plan.actions.first().category)
+        assertFalse(plan.actions.first().requiresApproval)
     }
 
     @Test
@@ -178,8 +178,8 @@ class JarvisEngineTest {
 
     @Test
     fun `unavailable tool detection`() = runTest {
-        val parsed = parser.parse("open nonExistentApp")
-        val result = toolExecutor.executeAction(parsed)
+        val plan = parser.parse("open nonExistentApp")
+        val result = toolExecutor.executeAction(plan.actions.first())
         assertEquals(ToolExecutionStatus.NOT_INSTALLED, result.status)
         assertTrue(result.message.contains("not registered or installed"))
     }
@@ -191,39 +191,39 @@ class JarvisEngineTest {
         assertNotNull(pydroidTool)
         assertFalse(pydroidTool!!.enabled)
 
-        val parsed = parser.parse("open pydroid")
-        val result = toolExecutor.executeAction(parsed)
+        val plan = parser.parse("open pydroid")
+        val result = toolExecutor.executeAction(plan.actions.first())
         assertEquals(ToolExecutionStatus.FAILED, result.status)
         assertTrue(result.message.contains("disabled in settings"))
     }
 
     @Test
     fun `development placeholder returns NOT_IMPLEMENTED`() = runTest {
-        val parsed = parser.parse("build a PWA")
-        val result = toolExecutor.executeAction(parsed)
+        val plan = parser.parse("build a PWA")
+        val result = toolExecutor.executeAction(plan.actions.first())
         assertEquals(ToolExecutionStatus.NOT_IMPLEMENTED, result.status)
         assertTrue(result.message.contains("not yet implemented"))
     }
 
     @Test
     fun `failed execution is not logged as success`() = runTest {
-        val parsed = parser.parse("do something strange")
-        val result = toolExecutor.executeAction(parsed)
+        val plan = parser.parse("do something strange")
+        val result = toolExecutor.executeAction(plan.actions.first())
         assertNotEquals(ToolExecutionStatus.SUCCESS, result.status)
         assertEquals(ToolExecutionStatus.NOT_IMPLEMENTED, result.status)
     }
 
     @Test
     fun `ToolExecutionResult message is persisted and descriptive`() = runTest {
-        val parsed = parser.parse("open nonExistentTool")
-        val result = toolExecutor.executeAction(parsed)
+        val plan = parser.parse("open nonExistentTool")
+        val result = toolExecutor.executeAction(plan.actions.first())
         assertTrue(result.message.isNotBlank())
     }
 
     @Test
     fun `local processing disabled behaviour`() = runTest {
-        val parsed = parser.parse("open github")
-        val result = toolExecutor.executeAction(parsed, isLocalProcessingEnabled = false)
+        val plan = parser.parse("open github")
+        val result = toolExecutor.executeAction(plan.actions.first(), isLocalProcessingEnabled = false)
         assertEquals(ToolExecutionStatus.FAILED, result.status)
         assertEquals("Local command processing is currently disabled in settings.", result.message)
     }
@@ -235,8 +235,9 @@ class JarvisEngineTest {
         fakeContactsProvider.candidates = listOf(
             ContactCandidate("1", "Sarah Smith", listOf(ContactDestination("0712345678", "Mobile")))
         )
-        val parsed = parser.parse("call Sarah Smith")
-        val res = contactResolver.resolveCommandTarget(parsed)
+        val plan = parser.parse("call Sarah Smith")
+        val res = contactResolver.resolveCommandTarget(plan.actions.first())
+
         assertTrue(res is ContactResolutionResult.Resolved)
         val resolved = res as ContactResolutionResult.Resolved
         assertEquals("Sarah Smith", resolved.displayName)
@@ -249,8 +250,9 @@ class JarvisEngineTest {
             ContactCandidate("1", "Sarah", listOf(ContactDestination("0700000000", "Mobile"))),
             ContactCandidate("2", "Sarah Smith", listOf(ContactDestination("0712345678", "Mobile")))
         )
-        val parsed = parser.parse("text Sarah Smith I'm running late")
-        val res = contactResolver.resolveCommandTarget(parsed)
+        val plan = parser.parse("text Sarah Smith I'm running late")
+        val res = contactResolver.resolveCommandTarget(plan.actions.first())
+
         assertTrue(res is ContactResolutionResult.Resolved)
         val resolved = res as ContactResolutionResult.Resolved
         assertEquals("Sarah Smith", resolved.displayName)
@@ -263,8 +265,9 @@ class JarvisEngineTest {
             ContactCandidate("1", "John Smith", listOf(ContactDestination("0711111111", "Mobile"))),
             ContactCandidate("2", "John Miller", listOf(ContactDestination("0722222222", "Mobile")))
         )
-        val parsed = parser.parse("call John")
-        val res = contactResolver.resolveCommandTarget(parsed)
+        val plan = parser.parse("call John")
+        val res = contactResolver.resolveCommandTarget(plan.actions.first())
+
         assertTrue(res is ContactResolutionResult.Ambiguous)
         val ambiguous = res as ContactResolutionResult.Ambiguous
         assertEquals(2, ambiguous.candidates.size)
@@ -273,16 +276,18 @@ class JarvisEngineTest {
     @Test
     fun `contact not found`() = runTest {
         fakeContactsProvider.candidates = emptyList()
-        val parsed = parser.parse("call UnknownPerson")
-        val res = contactResolver.resolveCommandTarget(parsed)
+        val plan = parser.parse("call UnknownPerson")
+        val res = contactResolver.resolveCommandTarget(plan.actions.first())
+
         assertEquals(ContactResolutionResult.NotFound, res)
     }
 
     @Test
     fun `contact permission required`() = runTest {
         fakeContactsProvider.hasPerm = false
-        val parsed = parser.parse("call Sarah")
-        val res = contactResolver.resolveCommandTarget(parsed)
+        val plan = parser.parse("call Sarah")
+        val res = contactResolver.resolveCommandTarget(plan.actions.first())
+
         assertEquals(ContactResolutionResult.PermissionRequired, res)
     }
 
@@ -296,8 +301,9 @@ class JarvisEngineTest {
                 )
             )
         )
-        val parsed = parser.parse("call John Smith")
-        val res = contactResolver.resolveCommandTarget(parsed)
+        val plan = parser.parse("call John Smith")
+        val res = contactResolver.resolveCommandTarget(plan.actions.first())
+
         assertTrue(res is ContactResolutionResult.MultipleDestinations)
         val multi = res as ContactResolutionResult.MultipleDestinations
         assertEquals(2, multi.destinations.size)
@@ -313,8 +319,9 @@ class JarvisEngineTest {
                 )
             )
         )
-        val parsed = parser.parse("email John Smith: Hi")
-        val res = contactResolver.resolveCommandTarget(parsed)
+        val plan = parser.parse("email John Smith: Hi")
+        val res = contactResolver.resolveCommandTarget(plan.actions.first())
+
         assertTrue(res is ContactResolutionResult.MultipleDestinations)
         val multi = res as ContactResolutionResult.MultipleDestinations
         assertEquals(2, multi.destinations.size)
@@ -323,8 +330,8 @@ class JarvisEngineTest {
     @Test
     fun `permission denial never executes communication`() = runTest {
         fakeContactsProvider.hasPerm = false
-        val parsed = parser.parse("call Sarah")
-        val execResult = toolExecutor.executeAction(parsed)
+        val plan = parser.parse("call Sarah")
+        val execResult = toolExecutor.executeAction(plan.actions.first())
         assertEquals(ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED, execResult.status)
     }
 
@@ -337,8 +344,9 @@ class JarvisEngineTest {
     @Test
     fun `no contact names are hardcoded in engine`() = runTest {
         fakeContactsProvider.candidates = emptyList()
-        val parsed = parser.parse("call John Smith")
-        val res = contactResolver.resolveCommandTarget(parsed)
+        val plan = parser.parse("call John Smith")
+        val res = contactResolver.resolveCommandTarget(plan.actions.first())
+
         assertNotEquals(ContactResolutionResult.Resolved("John Smith", ContactDestination("123", "Mobile")), res)
     }
 
@@ -346,16 +354,16 @@ class JarvisEngineTest {
 
     @Test
     fun `successful speech result feeds into the same command-processing path as typed input`() {
-        val parsedTyped = parser.parse("open github")
-        val parsedSpeech = parser.parse("open github")
-        assertEquals(parsedTyped.action, parsedSpeech.action)
-        assertEquals(parsedTyped.targetAppOrPerson, parsedSpeech.targetAppOrPerson)
+        val planTyped = parser.parse("open github")
+        val planSpeech = parser.parse("open github")
+        assertEquals(planTyped.actions.first().action, planSpeech.actions.first().action)
+        assertEquals(planTyped.actions.first().targetAppOrPerson, planSpeech.actions.first().targetAppOrPerson)
     }
 
     @Test
     fun `empty speech result does not execute a command`() {
-        val parsed = parser.parse("")
-        assertEquals(CommandAction.UNKNOWN, parsed.action)
+        val plan = parser.parse("")
+        assertEquals(CommandAction.UNKNOWN, plan.actions.first().action)
     }
 
     @Test
@@ -376,8 +384,8 @@ class JarvisEngineTest {
             displayName = "Sarah Smith",
             destination = ContactDestination("0712345678", "Mobile")
         )
-        val parsed = parser.parse("call Sarah Smith")
-        val execResult = toolExecutor.executeAction(parsed, resolvedResult = resolved)
+        val plan = parser.parse("call Sarah Smith")
+        val execResult = toolExecutor.executeAction(plan.actions.first(), resolvedResult = resolved)
         assertEquals(ToolExecutionStatus.SUCCESS, execResult.status)
 
         val shadowApp = org.robolectric.Shadows.shadowOf(context as android.app.Application)
@@ -393,8 +401,8 @@ class JarvisEngineTest {
             displayName = "Sarah Smith",
             destination = ContactDestination("0712345678", "Mobile")
         )
-        val parsed = parser.parse("call Sarah Smith")
-        toolExecutor.executeAction(parsed, resolvedResult = resolved)
+        val plan = parser.parse("call Sarah Smith")
+        toolExecutor.executeAction(plan.actions.first(), resolvedResult = resolved)
 
         val shadowApp = org.robolectric.Shadows.shadowOf(context as android.app.Application)
         val nextIntent = shadowApp.nextStartedActivity
@@ -409,8 +417,8 @@ class JarvisEngineTest {
             destination = ContactDestination("0712345678", "Mobile"),
             message = "Running late"
         )
-        val parsed = parser.parse("text Sarah Smith: Running late")
-        val execResult = toolExecutor.executeAction(parsed, resolvedResult = resolved)
+        val plan = parser.parse("text Sarah Smith: Running late")
+        val execResult = toolExecutor.executeAction(plan.actions.first(), resolvedResult = resolved)
         assertEquals(ToolExecutionStatus.SUCCESS, execResult.status)
 
         val shadowApp = org.robolectric.Shadows.shadowOf(context as android.app.Application)
@@ -428,8 +436,8 @@ class JarvisEngineTest {
             destination = ContactDestination("john@example.com", "Work"),
             message = "Meeting agenda"
         )
-        val parsed = parser.parse("email John Smith: Meeting agenda")
-        val execResult = toolExecutor.executeAction(parsed, resolvedResult = resolved)
+        val plan = parser.parse("email John Smith: Meeting agenda")
+        val execResult = toolExecutor.executeAction(plan.actions.first(), resolvedResult = resolved)
         assertEquals(ToolExecutionStatus.SUCCESS, execResult.status)
 
         val shadowApp = org.robolectric.Shadows.shadowOf(context as android.app.Application)
@@ -459,8 +467,9 @@ class JarvisEngineTest {
     @Test
     fun `contact provider error is distinguishable from contact-not-found`() = runTest {
         fakeContactsProvider.simulateError = true
-        val parsed = parser.parse("call Sarah")
-        val res = contactResolver.resolveCommandTarget(parsed)
+        val plan = parser.parse("call Sarah")
+        val res = contactResolver.resolveCommandTarget(plan.actions.first())
+
         assertTrue(res is ContactResolutionResult.ProviderError)
         assertNotEquals(ContactResolutionResult.NotFound, res)
     }
@@ -470,8 +479,9 @@ class JarvisEngineTest {
         fakeContactsProvider.candidates = listOf(
             ContactCandidate("1", "Alice", listOf(ContactDestination("12345", "Mobile")))
         )
-        val parsed = parser.parse("call Alice")
-        val res = contactResolver.resolveCommandTarget(parsed)
+        val plan = parser.parse("call Alice")
+        val res = contactResolver.resolveCommandTarget(plan.actions.first())
+
         assertTrue(res is ContactResolutionResult.Resolved)
         assertEquals("Alice", (res as ContactResolutionResult.Resolved).displayName)
     }
@@ -480,77 +490,77 @@ class JarvisEngineTest {
 
     @Test
     fun `open Pydroid natural command resolution`() {
-        val parsed = parser.parse("open Pydroid")
-        assertEquals(CommandAction.OPEN_APP, parsed.action)
-        val tool = toolRegistry.findTool(parsed.targetAppOrPerson!!)
+        val plan = parser.parse("open Pydroid")
+        assertEquals(CommandAction.OPEN_APP, plan.actions.first().action)
+        val tool = toolRegistry.findTool(plan.actions.first().targetAppOrPerson!!)
         assertNotNull(tool)
         assertEquals("pydroid", tool?.id)
-        assertNull(parsed.followUp)
+        assertNull(plan.actions.first().followUp)
     }
 
     @Test
     fun `open Pydroid 3 natural command resolution`() {
-        val parsed = parser.parse("open Pydroid 3")
-        assertEquals(CommandAction.OPEN_APP, parsed.action)
-        val tool = toolRegistry.findTool(parsed.targetAppOrPerson!!)
+        val plan = parser.parse("open Pydroid 3")
+        assertEquals(CommandAction.OPEN_APP, plan.actions.first().action)
+        val tool = toolRegistry.findTool(plan.actions.first().targetAppOrPerson!!)
         assertNotNull(tool)
         assertEquals("pydroid", tool?.id)
-        assertNull(parsed.followUp)
+        assertNull(plan.actions.first().followUp)
     }
 
     @Test
     fun `open Pydroid 3 and start coding separates follow-up text`() {
-        val parsed = parser.parse("open Pydroid 3 and start coding")
-        assertEquals(CommandAction.OPEN_APP, parsed.action)
-        val tool = toolRegistry.findTool(parsed.targetAppOrPerson!!)
+        val plan = parser.parse("open Pydroid 3 and start coding")
+        assertEquals(CommandAction.OPEN_APP, plan.actions.first().action)
+        val tool = toolRegistry.findTool(plan.actions.first().targetAppOrPerson!!)
         assertNotNull(tool)
         assertEquals("pydroid", tool?.id)
-        assertEquals("start coding", parsed.followUp)
+        assertEquals("start coding", plan.actions.first().followUp)
     }
 
     @Test
     fun `open GitHub please strips polite trailing words`() {
-        val parsed = parser.parse("open GitHub please")
-        assertEquals(CommandAction.OPEN_APP, parsed.action)
-        assertEquals("GitHub", parsed.targetAppOrPerson)
-        assertNull(parsed.followUp)
+        val plan = parser.parse("open GitHub please")
+        assertEquals(CommandAction.OPEN_APP, plan.actions.first().action)
+        assertEquals("GitHub", plan.actions.first().targetAppOrPerson)
+        assertNull(plan.actions.first().followUp)
     }
 
     @Test
     fun `launch Termux action verb resolution`() {
-        val parsed = parser.parse("launch Termux")
-        assertEquals(CommandAction.OPEN_APP, parsed.action)
-        val tool = toolRegistry.findTool(parsed.targetAppOrPerson!!)
+        val plan = parser.parse("launch Termux")
+        assertEquals(CommandAction.OPEN_APP, plan.actions.first().action)
+        val tool = toolRegistry.findTool(plan.actions.first().targetAppOrPerson!!)
         assertNotNull(tool)
         assertEquals("termux", tool?.id)
-        assertNull(parsed.followUp)
+        assertNull(plan.actions.first().followUp)
     }
 
     @Test
     fun `start Acode action verb resolution`() {
-        val parsed = parser.parse("start Acode")
-        assertEquals(CommandAction.OPEN_APP, parsed.action)
-        val tool = toolRegistry.findTool(parsed.targetAppOrPerson!!)
+        val plan = parser.parse("start Acode")
+        assertEquals(CommandAction.OPEN_APP, plan.actions.first().action)
+        val tool = toolRegistry.findTool(plan.actions.first().targetAppOrPerson!!)
         assertNotNull(tool)
         assertEquals("acode", tool?.id)
-        assertNull(parsed.followUp)
+        assertNull(plan.actions.first().followUp)
     }
 
     @Test
     fun `Pyroid uniquely resolves to Pydroid via conservative fuzzy matching`() {
-        val parsed = parser.parse("Pyroid")
-        assertEquals(CommandAction.OPEN_APP, parsed.action)
-        val tool = toolRegistry.findTool(parsed.targetAppOrPerson!!)
+        val plan = parser.parse("Pyroid")
+        assertEquals(CommandAction.OPEN_APP, plan.actions.first().action)
+        val tool = toolRegistry.findTool(plan.actions.first().targetAppOrPerson!!)
         assertNotNull(tool)
         assertEquals("pydroid", tool?.id)
     }
 
     @Test
     fun `unknown tool does not fuzzy-match dangerously`() {
-        val parsed = parser.parse("open Photoshop")
-        assertEquals(CommandAction.OPEN_APP, parsed.action)
+        val plan = parser.parse("open Photoshop")
+        assertEquals(CommandAction.OPEN_APP, plan.actions.first().action)
         // ToolRegistry findTool should return null for Photoshop
-        val tool = toolRegistry.findTool(parsed.targetAppOrPerson!!)
+        val tool = toolRegistry.findTool(plan.actions.first().targetAppOrPerson!!)
         assertNull(tool)
     }
 
@@ -569,9 +579,9 @@ class JarvisEngineTest {
 
     @Test
     fun `follow-up text reports not implemented without failing launch intent logic`() = runTest {
-        val parsed = parser.parse("open Pydroid 3 and start coding")
+        val plan = parser.parse("open Pydroid 3 and start coding")
         // If app is not installed, it safely returns NOT_INSTALLED
-        val result = toolExecutor.executeAction(parsed)
+        val result = toolExecutor.executeAction(plan.actions.first())
         assertEquals(ToolExecutionStatus.NOT_INSTALLED, result.status)
         assertTrue(result.message.contains("Pydroid"))
     }
@@ -658,5 +668,62 @@ class JarvisEngineTest {
         val updated = inputState.onSpeechResult(102L, "launch Termux")
         assertTrue(updated)
         assertEquals("launch Termux", inputState.text)
+    }
+    // --- PASS 3.3 TESTS: MULTI-ACTION COMMANDS ---
+    @Test
+    fun `open GitHub and Termux parses as two OPEN_APP actions`() {
+        val plan = parser.parse("open GitHub and Termux")
+        assertEquals(2, plan.actions.size)
+        assertEquals(CommandAction.OPEN_APP, plan.actions[0].action)
+        assertEquals("GitHub", plan.actions[0].targetAppOrPerson)
+        assertNull(plan.actions[0].followUp)
+        
+        assertEquals(CommandAction.OPEN_APP, plan.actions[1].action)
+        assertEquals("Termux", plan.actions[1].targetAppOrPerson)
+    }
+
+    @Test
+    fun `open GitHub then Termux parses as two OPEN_APP actions`() {
+        val plan = parser.parse("open GitHub then Termux")
+        assertEquals(2, plan.actions.size)
+        assertEquals(CommandAction.OPEN_APP, plan.actions[0].action)
+        assertEquals("GitHub", plan.actions[0].targetAppOrPerson)
+        
+        assertEquals(CommandAction.OPEN_APP, plan.actions[1].action)
+        assertEquals("Termux", plan.actions[1].targetAppOrPerson)
+    }
+
+    @Test
+    fun `launch Acode and Pydroid parses as two actions`() {
+        val plan = parser.parse("launch Acode and Pydroid")
+        assertEquals(2, plan.actions.size)
+        assertEquals(CommandAction.OPEN_APP, plan.actions[0].action)
+        assertEquals("Acode", plan.actions[0].targetAppOrPerson)
+        
+        assertEquals(CommandAction.OPEN_APP, plan.actions[1].action)
+        assertEquals("pydroid", plan.actions[1].targetAppOrPerson?.lowercase())
+    }
+
+    @Test
+    fun `open Pydroid and start coding parses as one app action plus followUp`() {
+        val plan = parser.parse("open Pydroid and start coding")
+        assertEquals(1, plan.actions.size)
+        assertEquals(CommandAction.OPEN_APP, plan.actions[0].action)
+        assertEquals("pydroid", plan.actions[0].targetAppOrPerson?.lowercase())
+        assertEquals("start coding", plan.actions[0].followUp)
+    }
+
+    @Test
+    fun `open GitHub and push code parses as safe open and consequential push requiring approval`() {
+        val plan = parser.parse("open GitHub and push code")
+        assertEquals(2, plan.actions.size)
+        assertEquals(CommandAction.OPEN_APP, plan.actions[0].action)
+        assertEquals("GitHub", plan.actions[0].targetAppOrPerson)
+        assertFalse(plan.actions[0].requiresApproval)
+        
+        assertEquals(CommandAction.PUSH, plan.actions[1].action)
+        assertTrue(plan.actions[1].requiresApproval)
+        
+        assertTrue(plan.requiresApproval) // entire plan needs approval
     }
 }
