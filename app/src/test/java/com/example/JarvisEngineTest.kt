@@ -6,6 +6,7 @@ import com.example.engine.*
 import com.example.engine.contacts.*
 import com.example.engine.speech.SpeechManager
 import com.example.engine.speech.SpeechState
+import com.example.ui.CommandInputState
 import com.example.util.PrivacyUtils
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
@@ -473,5 +474,189 @@ class JarvisEngineTest {
         val res = contactResolver.resolveCommandTarget(parsed)
         assertTrue(res is ContactResolutionResult.Resolved)
         assertEquals("Alice", (res as ContactResolutionResult.Resolved).displayName)
+    }
+
+    // --- PASS 3.2 TESTS: NATURAL TOOL COMMANDS & FUZZY MATCHING ---
+
+    @Test
+    fun `open Pydroid natural command resolution`() {
+        val parsed = parser.parse("open Pydroid")
+        assertEquals(CommandAction.OPEN_APP, parsed.action)
+        val tool = toolRegistry.findTool(parsed.targetAppOrPerson!!)
+        assertNotNull(tool)
+        assertEquals("pydroid", tool?.id)
+        assertNull(parsed.followUp)
+    }
+
+    @Test
+    fun `open Pydroid 3 natural command resolution`() {
+        val parsed = parser.parse("open Pydroid 3")
+        assertEquals(CommandAction.OPEN_APP, parsed.action)
+        val tool = toolRegistry.findTool(parsed.targetAppOrPerson!!)
+        assertNotNull(tool)
+        assertEquals("pydroid", tool?.id)
+        assertNull(parsed.followUp)
+    }
+
+    @Test
+    fun `open Pydroid 3 and start coding separates follow-up text`() {
+        val parsed = parser.parse("open Pydroid 3 and start coding")
+        assertEquals(CommandAction.OPEN_APP, parsed.action)
+        val tool = toolRegistry.findTool(parsed.targetAppOrPerson!!)
+        assertNotNull(tool)
+        assertEquals("pydroid", tool?.id)
+        assertEquals("start coding", parsed.followUp)
+    }
+
+    @Test
+    fun `open GitHub please strips polite trailing words`() {
+        val parsed = parser.parse("open GitHub please")
+        assertEquals(CommandAction.OPEN_APP, parsed.action)
+        assertEquals("GitHub", parsed.targetAppOrPerson)
+        assertNull(parsed.followUp)
+    }
+
+    @Test
+    fun `launch Termux action verb resolution`() {
+        val parsed = parser.parse("launch Termux")
+        assertEquals(CommandAction.OPEN_APP, parsed.action)
+        val tool = toolRegistry.findTool(parsed.targetAppOrPerson!!)
+        assertNotNull(tool)
+        assertEquals("termux", tool?.id)
+        assertNull(parsed.followUp)
+    }
+
+    @Test
+    fun `start Acode action verb resolution`() {
+        val parsed = parser.parse("start Acode")
+        assertEquals(CommandAction.OPEN_APP, parsed.action)
+        val tool = toolRegistry.findTool(parsed.targetAppOrPerson!!)
+        assertNotNull(tool)
+        assertEquals("acode", tool?.id)
+        assertNull(parsed.followUp)
+    }
+
+    @Test
+    fun `Pyroid uniquely resolves to Pydroid via conservative fuzzy matching`() {
+        val parsed = parser.parse("Pyroid")
+        assertEquals(CommandAction.OPEN_APP, parsed.action)
+        val tool = toolRegistry.findTool(parsed.targetAppOrPerson!!)
+        assertNotNull(tool)
+        assertEquals("pydroid", tool?.id)
+    }
+
+    @Test
+    fun `unknown tool does not fuzzy-match dangerously`() {
+        val parsed = parser.parse("open Photoshop")
+        assertEquals(CommandAction.OPEN_APP, parsed.action)
+        // ToolRegistry findTool should return null for Photoshop
+        val tool = toolRegistry.findTool(parsed.targetAppOrPerson!!)
+        assertNull(tool)
+    }
+
+    @Test
+    fun `ambiguous fuzzy result does not guess`() {
+        val matcher = ToolCommandMatcher {
+            listOf(
+                Tool(id = "alpha", name = "Testa", description = "", capabilities = emptyList(), preferredUses = "", toolType = ToolType.APP, packageNames = emptyList(), aliases = listOf("toolalpha")),
+                Tool(id = "beta", name = "Testb", description = "", capabilities = emptyList(), preferredUses = "", toolType = ToolType.APP, packageNames = emptyList(), aliases = listOf("toolalphb"))
+            )
+        }
+        val outcome = matcher.matchSingleTarget("toolalphx")
+        // Both are distance 1, must return Ambiguous, NOT guess
+        assertTrue(outcome is ToolMatchOutcome.Ambiguous)
+    }
+
+    @Test
+    fun `follow-up text reports not implemented without failing launch intent logic`() = runTest {
+        val parsed = parser.parse("open Pydroid 3 and start coding")
+        // If app is not installed, it safely returns NOT_INSTALLED
+        val result = toolExecutor.executeAction(parsed)
+        assertEquals(ToolExecutionStatus.NOT_INSTALLED, result.status)
+        assertTrue(result.message.contains("Pydroid"))
+    }
+
+    // --- PASS 3.2 TESTS: TEXT INPUT STATE & REGRESSION ---
+
+    @Test
+    fun `new speech result populates field once`() {
+        val inputState = CommandInputState()
+        val updated = inputState.onSpeechResult(101L, "open Pydroid")
+        assertTrue(updated)
+        assertEquals("open Pydroid", inputState.text)
+
+        // Same event ID does not re-populate or return true
+        val rehandled = inputState.onSpeechResult(101L, "open Pydroid")
+        assertFalse(rehandled)
+        assertEquals("open Pydroid", inputState.text)
+    }
+
+    @Test
+    fun `deleting recognised text remains deleted`() {
+        val inputState = CommandInputState()
+        inputState.onSpeechResult(101L, "open Pydroid")
+        assertEquals("open Pydroid", inputState.text)
+
+        // User backspaces
+        inputState.deleteLastChar()
+        assertEquals("open Pydroi", inputState.text)
+
+        // Recomposition occurs with the same speech event
+        inputState.onRecompose(101L, "open Pydroid")
+        assertEquals("open Pydroi", inputState.text)
+    }
+
+    @Test
+    fun `editing recognised text remains edited`() {
+        val inputState = CommandInputState()
+        inputState.onSpeechResult(101L, "open Pydroid")
+
+        // User edits text
+        inputState.onUserTextChange("open Pydroid 3 and start coding")
+        assertEquals("open Pydroid 3 and start coding", inputState.text)
+
+        // Recomposition occurs
+        inputState.onRecompose(101L, "open Pydroid")
+        assertEquals("open Pydroid 3 and start coding", inputState.text)
+    }
+
+    @Test
+    fun `clear button clears input`() {
+        val inputState = CommandInputState()
+        inputState.onSpeechResult(101L, "open Pydroid")
+        assertEquals("open Pydroid", inputState.text)
+
+        inputState.clear()
+        assertEquals("", inputState.text)
+
+        // Recomposition does not restore cleared text
+        inputState.onRecompose(101L, "open Pydroid")
+        assertEquals("", inputState.text)
+    }
+
+    @Test
+    fun `recomposition does not restore stale speech text`() {
+        val inputState = CommandInputState()
+        inputState.onSpeechResult(101L, "call Alice")
+        inputState.clear()
+
+        // 5 recomposition frames
+        repeat(5) {
+            inputState.onRecompose(101L, "call Alice")
+        }
+        assertEquals("", inputState.text)
+    }
+
+    @Test
+    fun `new later speech result can populate the field again`() {
+        val inputState = CommandInputState()
+        inputState.onSpeechResult(101L, "open Pydroid")
+        inputState.clear()
+        assertEquals("", inputState.text)
+
+        // New speech event with ID 102
+        val updated = inputState.onSpeechResult(102L, "launch Termux")
+        assertTrue(updated)
+        assertEquals("launch Termux", inputState.text)
     }
 }

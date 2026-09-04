@@ -38,7 +38,8 @@ data class JarvisUiState(
     val pendingMessageForDestination: String? = null,
     val permissionRationaleNeeded: String? = null, // "MIC" or "CONTACTS"
     val permissionPermanentlyDenied: String? = null, // "MIC" or "CONTACTS"
-    val lastRecognizedText: String = ""
+    val lastRecognizedText: String = "",
+    val speechEventId: Long = 0L
 )
 
 class JarvisViewModel(
@@ -51,6 +52,8 @@ class JarvisViewModel(
     private val commandParser: CommandParser = CommandParser(),
     private val taskRouter: TaskRouter = TaskRouter(toolRegistry)
 ) : ViewModel() {
+
+    private var speechEventCounter: Long = 0L
 
     val activityLogs: StateFlow<List<ActivityLog>> = repository.allLogs
         .stateIn(
@@ -93,9 +96,11 @@ class JarvisViewModel(
                         _uiState.value = _uiState.value.copy(status = "Processing speech")
                     }
                     is SpeechState.Success -> {
+                        val eventId = ++speechEventCounter
                         _uiState.value = _uiState.value.copy(
                             status = "Ready",
-                            lastRecognizedText = speechState.text
+                            lastRecognizedText = speechState.text,
+                            speechEventId = eventId
                         )
                         processCommand(speechState.text)
                     }
@@ -353,6 +358,10 @@ class JarvisViewModel(
         viewModelScope.launch {
             settingsManager.setToolEnabled(toolId, enabled)
         }
+    }
+
+    fun refreshTools() {
+        toolRegistry.refreshTools()
     }
 
     private fun logActivity(command: ParsedCommand, planText: String, status: String, resultMessage: String) {

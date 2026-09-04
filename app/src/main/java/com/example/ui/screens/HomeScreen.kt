@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Person
@@ -56,8 +57,11 @@ fun HomeScreen(
 ) {
     var inputText by remember { mutableStateOf("") }
 
-    if (uiState.lastRecognizedText.isNotBlank() && inputText != uiState.lastRecognizedText) {
-        inputText = uiState.lastRecognizedText
+    // Populate field once when a new speech recognition event arrives
+    LaunchedEffect(uiState.speechEventId) {
+        if (uiState.speechEventId != 0L && uiState.lastRecognizedText.isNotBlank()) {
+            inputText = uiState.lastRecognizedText
+        }
     }
 
     if (uiState.permissionRationaleNeeded != null) {
@@ -348,7 +352,7 @@ fun HomeScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(recentLogs.take(5)) { log ->
-                        val isSuccess = log.status != "Rejected" && log.status != "FAILED"
+                        val visual = com.example.ui.ActivityStatusVisuals.getVisual(log.status)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -362,13 +366,13 @@ fun HomeScreen(
                                 modifier = Modifier
                                     .size(40.dp)
                                     .clip(RoundedCornerShape(12.dp))
-                                    .background(MaterialTheme.colorScheme.background.copy(alpha=0.5f)),
+                                    .background(visual.containerColor),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = if (isSuccess) Icons.Default.Build else Icons.Default.Warning,
-                                    contentDescription = null,
-                                    tint = if (isSuccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary,
+                                    imageVector = visual.icon,
+                                    contentDescription = log.status,
+                                    tint = visual.tint,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -376,14 +380,14 @@ fun HomeScreen(
                                 Text(
                                     text = log.command,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = if (isSuccess) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.tertiary,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     text = "${log.classification} • ${log.status}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.tertiary
+                                    color = visual.tint
                                 )
                             }
                         }
@@ -458,6 +462,17 @@ fun HomeScreen(
                         modifier = Modifier.weight(1f),
                         placeholder = { Text("Enter or speak command...", color = MaterialTheme.colorScheme.tertiary) },
                         singleLine = true,
+                        trailingIcon = if (inputText.isNotEmpty()) {
+                            {
+                                IconButton(onClick = { inputText = "" }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Clear,
+                                        contentDescription = "Clear input",
+                                        tint = MaterialTheme.colorScheme.tertiary
+                                    )
+                                }
+                            }
+                        } else null,
                         colors = TextFieldDefaults.colors(
                             focusedContainerColor = Color.Transparent,
                             unfocusedContainerColor = Color.Transparent,

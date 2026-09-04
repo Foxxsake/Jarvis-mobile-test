@@ -11,6 +11,7 @@ class ToolRegistry(private val context: Context) {
     val tools: StateFlow<List<Tool>> = _tools.asStateFlow()
 
     private var disabledIds: Set<String> = emptySet()
+    private val toolMatcher = ToolCommandMatcher { _tools.value }
 
     init {
         refreshTools()
@@ -22,7 +23,54 @@ class ToolRegistry(private val context: Context) {
     }
 
     fun refreshTools() {
-        val baseTools = listOf(
+        val updatedTools = STANDARD_TOOLS.map { tool ->
+            val isEnabled = !disabledIds.contains(tool.id)
+            if (tool.toolType == ToolType.APP && tool.packageNames.isNotEmpty()) {
+                val detectedPackage = findInstalledPackage(tool.packageNames)
+                tool.copy(
+                    installedOrAvailable = detectedPackage != null,
+                    installedPackageName = detectedPackage,
+                    enabled = isEnabled
+                )
+            } else {
+                tool.copy(enabled = isEnabled)
+            }
+        }
+        _tools.value = updatedTools
+    }
+
+    private fun findInstalledPackage(packageNames: List<String>): String? {
+        val pm = try { context.packageManager } catch (e: Exception) { null } ?: return null
+        for (pkg in packageNames) {
+            try {
+                pm.getPackageInfo(pkg, 0)
+                return pkg
+            } catch (_: Exception) {
+            }
+        }
+        return null
+    }
+
+    fun findTool(query: String): Tool? {
+        val clean = query.trim()
+        if (clean.isBlank()) return null
+
+        val currentList = _tools.value
+        // 1. Try matcher (exact, normalized, conservative fuzzy)
+        val outcome = toolMatcher.matchSingleTarget(clean, currentList)
+        if (outcome is ToolMatchOutcome.Success) {
+            return outcome.result.tool
+        }
+
+        val lower = clean.lowercase()
+        // 2. Fallback to substring in name or alias
+        return currentList.find { tool ->
+            tool.name.lowercase().contains(lower) || tool.aliases.any { alias -> alias.lowercase().contains(lower) }
+        }
+    }
+
+    companion object {
+        val STANDARD_TOOLS = listOf(
             Tool(
                 id = "github",
                 name = "GitHub",
@@ -105,52 +153,5 @@ class ToolRegistry(private val context: Context) {
                 installedOrAvailable = true
             )
         )
-
-        val updatedTools = baseTools.map { tool ->
-            val isEnabled = !disabledIds.contains(tool.id)
-            if (tool.toolType == ToolType.APP && tool.packageNames.isNotEmpty()) {
-                val detectedPackage = findInstalledPackage(tool.packageNames)
-                tool.copy(
-                    installedOrAvailable = detectedPackage != null,
-                    installedPackageName = detectedPackage,
-                    enabled = isEnabled
-                )
-            } else {
-                tool.copy(enabled = isEnabled)
-            }
-        }
-        _tools.value = updatedTools
-    }
-
-    private fun findInstalledPackage(packageNames: List<String>): String? {
-        val pm = try { context.packageManager } catch (e: Exception) { null } ?: return null
-        for (pkg in packageNames) {
-            try {
-                pm.getPackageInfo(pkg, 0)
-                return pkg
-            } catch (_: Exception) {
-            }
-        }
-        return null
-    }
-
-    fun findTool(query: String): Tool? {
-        val clean = query.trim().lowercase()
-        if (clean.isBlank()) return null
-
-        val currentList = _tools.value
-        // 1. Match by ID
-        currentList.find { it.id.lowercase() == clean }?.let { return it }
-
-        // 2. Match by Name
-        currentList.find { it.name.lowercase() == clean }?.let { return it }
-
-        // 3. Match by Alias
-        currentList.find { tool -> tool.aliases.any { alias -> alias.lowercase() == clean } }?.let { return it }
-
-        // 4. Match substring in Name or Alias
-        return currentList.find { tool ->
-            tool.name.lowercase().contains(clean) || tool.aliases.any { alias -> alias.lowercase().contains(clean) }
-        }
     }
 }

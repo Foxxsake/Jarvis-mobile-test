@@ -16,5 +16,6 @@ data class ParsedCommand(
     val targetAppOrPerson: String? = null,
     val rawArguments: String? = null,
     val messageOrQuery: String? = null,
+    val followUp: String? = null,
     val requiresApproval: Boolean
 )

@@ -1,6 +1,9 @@
 package com.example.engine
 
-class CommandParser(private val approvalManager: ApprovalManager = ApprovalManager()) {
+class CommandParser(
+    private val approvalManager: ApprovalManager = ApprovalManager(),
+    private val toolMatcher: ToolCommandMatcher = ToolCommandMatcher()
+) {
     fun parse(text: String): ParsedCommand {
         val trimmed = text.trim()
         val lower = trimmed.lowercase()
@@ -12,17 +15,6 @@ class CommandParser(private val approvalManager: ApprovalManager = ApprovalManag
                 category = CommandCategory.DEVICE_ACTION,
                 targetAppOrPerson = "settings",
                 requiresApproval = approvalManager.requiresApproval(CommandAction.OPEN_SETTINGS, CommandCategory.DEVICE_ACTION, text)
-            )
-        }
-
-        if (lower.startsWith("open ")) {
-            val target = trimmed.substring(5).trim()
-            return ParsedCommand(
-                rawText = text,
-                action = CommandAction.OPEN_APP,
-                category = CommandCategory.DEVICE_ACTION,
-                targetAppOrPerson = target,
-                requiresApproval = approvalManager.requiresApproval(CommandAction.OPEN_APP, CommandCategory.DEVICE_ACTION, text)
             )
         }
 
@@ -134,6 +126,59 @@ class CommandParser(private val approvalManager: ApprovalManager = ApprovalManag
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = trimmed.substring(4).trim(),
                 requiresApproval = approvalManager.requiresApproval(CommandAction.RUN_COMMAND, CommandCategory.DEVELOPMENT, text)
+            )
+        }
+
+        // Check for app opening / natural commands
+        val isOpenVerb = lower.startsWith("open ") || lower.startsWith("launch ") ||
+                lower.startsWith("start ") || lower.startsWith("go to ") ||
+                lower.startsWith("please ")
+
+        if (isOpenVerb) {
+            val match = toolMatcher.match(trimmed)
+            if (match is ToolMatchOutcome.Success) {
+                val target = if (match.result.matchedTerm.equals(match.result.tool.name, ignoreCase = true)) {
+                    match.result.tool.name
+                } else {
+                    match.result.matchedTerm
+                }
+                return ParsedCommand(
+                    rawText = text,
+                    action = CommandAction.OPEN_APP,
+                    category = CommandCategory.DEVICE_ACTION,
+                    targetAppOrPerson = target,
+                    rawArguments = match.result.followUp,
+                    followUp = match.result.followUp,
+                    requiresApproval = approvalManager.requiresApproval(CommandAction.OPEN_APP, CommandCategory.DEVICE_ACTION, text)
+                )
+            } else if (lower.startsWith("open ")) {
+                val target = trimmed.substring(5).trim()
+                return ParsedCommand(
+                    rawText = text,
+                    action = CommandAction.OPEN_APP,
+                    category = CommandCategory.DEVICE_ACTION,
+                    targetAppOrPerson = target,
+                    requiresApproval = approvalManager.requiresApproval(CommandAction.OPEN_APP, CommandCategory.DEVICE_ACTION, text)
+                )
+            }
+        }
+
+        // Direct tool name or alias match without opening verb (e.g., "Pyroid", "Pydroid 3", "Termux")
+        val directMatch = toolMatcher.match(trimmed)
+        if (directMatch is ToolMatchOutcome.Success) {
+            val target = if (directMatch.result.matchedTerm.equals(directMatch.result.tool.name, ignoreCase = true)) {
+                directMatch.result.tool.name
+            } else {
+                directMatch.result.matchedTerm
+            }
+            return ParsedCommand(
+                rawText = text,
+                action = CommandAction.OPEN_APP,
+                category = CommandCategory.DEVICE_ACTION,
+                targetAppOrPerson = target,
+                rawArguments = directMatch.result.followUp,
+                followUp = directMatch.result.followUp,
+                requiresApproval = approvalManager.requiresApproval(CommandAction.OPEN_APP, CommandCategory.DEVICE_ACTION, text)
             )
         }
 

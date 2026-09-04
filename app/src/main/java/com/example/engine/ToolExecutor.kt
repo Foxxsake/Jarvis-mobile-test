@@ -90,12 +90,22 @@ class ToolExecutor(
             return ToolExecutionResult(ToolExecutionStatus.NOT_INSTALLED, "${tool.name} is not installed.")
         }
 
+        val followUpText = command.followUp
+        val followUpSuffix = if (!followUpText.isNullOrBlank()) {
+            " Follow-up automation '$followUpText' is not implemented yet."
+        } else {
+            ""
+        }
+
+        val appDisplayName = if (tool.id == "pydroid") "Pydroid" else tool.name
+
         if (tool.toolType == ToolType.WEB && tool.url != null) {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(tool.url))
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             return try {
                 context.startActivity(intent)
-                ToolExecutionResult(ToolExecutionStatus.SUCCESS, "Opened ${tool.name} in browser")
+                val baseMsg = if (followUpSuffix.isNotBlank()) "$appDisplayName opened." else "Opened ${tool.name} in browser"
+                ToolExecutionResult(ToolExecutionStatus.SUCCESS, baseMsg + followUpSuffix)
             } catch (e: Exception) {
                 ToolExecutionResult(ToolExecutionStatus.FAILED, "Failed to open browser: ${e.message}")
             }
@@ -113,7 +123,8 @@ class ToolExecutor(
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     return try {
                         context.startActivity(intent)
-                        ToolExecutionResult(ToolExecutionStatus.SUCCESS, "Launched ${tool.name}")
+                        val baseMsg = if (followUpSuffix.isNotBlank()) "$appDisplayName opened." else "Launched ${tool.name}"
+                        ToolExecutionResult(ToolExecutionStatus.SUCCESS, baseMsg + followUpSuffix)
                     } catch (e: Exception) {
                         ToolExecutionResult(ToolExecutionStatus.FAILED, "Failed to launch ${tool.name}: ${e.message}")
                     }

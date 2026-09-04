@@ -197,6 +197,7 @@ class MainActivity : ComponentActivity() {
                             ToolsScreen(
                                 tools = tools,
                                 onToggleToolEnabled = { id, enabled -> viewModel.toggleToolEnabled(id, enabled) },
+                                onRefreshTools = { viewModel.refreshTools() },
                                 onBack = { navController.popBackStack() }
                             )
                         }
