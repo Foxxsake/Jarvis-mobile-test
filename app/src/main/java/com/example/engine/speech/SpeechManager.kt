@@ -71,6 +71,7 @@ class SpeechManager(private val context: Context) {
                 override fun onError(error: Int) {
                     val msg = mapSpeechError(error)
                     _speechState.value = SpeechState.Error(msg)
+                    destroyRecognizer()
                 }
 
                 override fun onResults(results: Bundle?) {
@@ -81,6 +82,7 @@ class SpeechManager(private val context: Context) {
                     } else {
                         _speechState.value = SpeechState.Error("No speech matched. Please try again.")
                     }
+                    destroyRecognizer()
                 }
 
                 override fun onPartialResults(partialResults: Bundle?) {}

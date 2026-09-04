@@ -48,6 +48,8 @@ fun HomeScreen(
     onSelectDestination: (ContactDestination) -> Unit,
     onRequestPermission: (String) -> Unit,
     onDismissRationale: () -> Unit,
+    onDismissPermanentlyDenied: () -> Unit = {},
+    onOpenAppSettings: () -> Unit = {},
     onNavigateToTools: () -> Unit,
     onNavigateToActivity: () -> Unit,
     onNavigateToSettings: () -> Unit,
@@ -87,6 +89,38 @@ fun HomeScreen(
             dismissButton = {
                 TextButton(onClick = onDismissRationale) {
                     Text("Not now")
+                }
+            }
+        )
+    }
+
+    if (uiState.permissionPermanentlyDenied != null) {
+        val isMic = uiState.permissionPermanentlyDenied == "MIC"
+        AlertDialog(
+            onDismissRequest = onDismissPermanentlyDenied,
+            title = {
+                Text(if (isMic) "Microphone Permission Required" else "Contacts Permission Required")
+            },
+            text = {
+                Text(
+                    if (isMic) {
+                        "Microphone permission was permanently denied. Please enable Microphone access in Android App Settings to use voice input."
+                    } else {
+                        "Contacts permission was permanently denied. Please enable Contacts access in Android App Settings to search contacts."
+                    }
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    onDismissPermanentlyDenied()
+                    onOpenAppSettings()
+                }) {
+                    Text("Open Settings")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissPermanentlyDenied) {
+                    Text("Cancel")
                 }
             }
         )

@@ -5,8 +5,16 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.ContactsContract
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-class AndroidContactsProvider(private val context: Context) : ContactsProvider {
+class AndroidContactsProvider(
+    private val context: Context,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+) : ContactsProvider {
+
+    var simulateError: Boolean = false
 
     override fun hasPermission(): Boolean {
         return ContextCompat.checkSelfPermission(
@@ -15,20 +23,25 @@ class AndroidContactsProvider(private val context: Context) : ContactsProvider {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    override fun searchContacts(query: String, isEmail: Boolean): List<ContactCandidate> {
-        if (!hasPermission()) return emptyList()
-        val all = getAllContacts(isEmail)
+    override suspend fun searchContacts(query: String, isEmail: Boolean): List<ContactCandidate> = withContext(ioDispatcher) {
+        if (!hasPermission()) return@withContext emptyList()
+        if (simulateError) throw ContactsProviderException("Simulated contacts provider error")
+        val all = getAllContactsInternal(isEmail)
         val cleanQuery = query.trim().lowercase()
-        if (cleanQuery.isBlank()) return all
+        if (cleanQuery.isBlank()) return@withContext all
 
-        return all.filter { candidate ->
+        all.filter { candidate ->
             candidate.displayName.lowercase().contains(cleanQuery)
         }
     }
 
-    override fun getAllContacts(isEmail: Boolean): List<ContactCandidate> {
-        if (!hasPermission()) return emptyList()
+    override suspend fun getAllContacts(isEmail: Boolean): List<ContactCandidate> = withContext(ioDispatcher) {
+        if (!hasPermission()) return@withContext emptyList()
+        if (simulateError) throw ContactsProviderException("Simulated contacts provider error")
+        getAllContactsInternal(isEmail)
+    }
 
+    private fun getAllContactsInternal(isEmail: Boolean): List<ContactCandidate> {
         val resultMap = LinkedHashMap<String, MutableContactCandidate>()
         val contentResolver = context.contentResolver
 
@@ -73,7 +86,8 @@ class AndroidContactsProvider(private val context: Context) : ContactsProvider {
                         }
                     }
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                throw ContactsProviderException("Failed to query phone contacts provider: ${e.message}", e)
             }
         } else {
             val uri = ContactsContract.CommonDataKinds.Email.CONTENT_URI
@@ -116,7 +130,8 @@ class AndroidContactsProvider(private val context: Context) : ContactsProvider {
                         }
                     }
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                throw ContactsProviderException("Failed to query email contacts provider: ${e.message}", e)
             }
         }
 

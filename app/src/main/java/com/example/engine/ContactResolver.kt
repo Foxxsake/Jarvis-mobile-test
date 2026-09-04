@@ -6,73 +6,77 @@ import com.example.engine.contacts.ContactsProvider
 
 class ContactResolver(private val contactsProvider: ContactsProvider) {
 
-    fun resolveCommandTarget(command: ParsedCommand): ContactResolutionResult {
+    suspend fun resolveCommandTarget(command: ParsedCommand): ContactResolutionResult {
         if (!contactsProvider.hasPermission()) {
             return ContactResolutionResult.PermissionRequired
         }
 
         val isEmail = command.action == CommandAction.EMAIL
 
-        if (command.action == CommandAction.CALL) {
-            val target = command.targetAppOrPerson?.trim() ?: command.rawArguments?.trim()
-            if (target.isNullOrBlank()) {
-                return ContactResolutionResult.ResolutionRequired
-            }
-            return resolveNameTarget(target, isEmail = false, explicitMessage = null)
-        }
-
-        if (command.action == CommandAction.TEXT || command.action == CommandAction.EMAIL) {
-            val explicitTarget = command.targetAppOrPerson?.trim()
-            val explicitMessage = command.messageOrQuery?.trim()
-
-            if (!explicitTarget.isNullOrBlank()) {
-                return resolveNameTarget(explicitTarget, isEmail = isEmail, explicitMessage = explicitMessage)
-            }
-
-            val rawInput = command.rawArguments?.trim()
-            if (rawInput.isNullOrBlank()) {
-                return ContactResolutionResult.ResolutionRequired
-            }
-
-            val allContacts = contactsProvider.getAllContacts(isEmail = isEmail)
-            val lowerInput = rawInput.lowercase()
-
-            val prefixMatches = allContacts.filter { contact ->
-                val lowerName = contact.displayName.trim().lowercase()
-                lowerName.isNotEmpty() && (lowerInput == lowerName || lowerInput.startsWith("$lowerName "))
-            }
-
-            if (prefixMatches.isNotEmpty()) {
-                val sorted = prefixMatches.sortedByDescending { it.displayName.trim().length }
-                val longestLength = sorted.first().displayName.trim().length
-                val topTier = sorted.filter { it.displayName.trim().length == longestLength }
-
-                if (topTier.size == 1) {
-                    val matched = topTier.first()
-                    val matchedName = matched.displayName.trim()
-                    val remainingMessage = if (rawInput.length > matchedName.length) {
-                        rawInput.substring(matchedName.length).trim()
-                    } else {
-                        null
-                    }
-                    val finalMsg = if (!explicitMessage.isNullOrBlank()) explicitMessage else remainingMessage
-                    return resolveCandidateDestinations(matched, finalMsg)
-                } else {
-                    return ContactResolutionResult.Ambiguous(
-                        query = rawInput,
-                        candidates = topTier,
-                        message = explicitMessage
-                    )
+        try {
+            if (command.action == CommandAction.CALL) {
+                val target = command.targetAppOrPerson?.trim() ?: command.rawArguments?.trim()
+                if (target.isNullOrBlank()) {
+                    return ContactResolutionResult.ResolutionRequired
                 }
+                return resolveNameTarget(target, isEmail = false, explicitMessage = null)
             }
 
-            return resolveNameTarget(rawInput, isEmail = isEmail, explicitMessage = explicitMessage)
+            if (command.action == CommandAction.TEXT || command.action == CommandAction.EMAIL) {
+                val explicitTarget = command.targetAppOrPerson?.trim()
+                val explicitMessage = command.messageOrQuery?.trim()
+
+                if (!explicitTarget.isNullOrBlank()) {
+                    return resolveNameTarget(explicitTarget, isEmail = isEmail, explicitMessage = explicitMessage)
+                }
+
+                val rawInput = command.rawArguments?.trim()
+                if (rawInput.isNullOrBlank()) {
+                    return ContactResolutionResult.ResolutionRequired
+                }
+
+                val allContacts = contactsProvider.getAllContacts(isEmail = isEmail)
+                val lowerInput = rawInput.lowercase()
+
+                val prefixMatches = allContacts.filter { contact ->
+                    val lowerName = contact.displayName.trim().lowercase()
+                    lowerName.isNotEmpty() && (lowerInput == lowerName || lowerInput.startsWith("$lowerName "))
+                }
+
+                if (prefixMatches.isNotEmpty()) {
+                    val sorted = prefixMatches.sortedByDescending { it.displayName.trim().length }
+                    val longestLength = sorted.first().displayName.trim().length
+                    val topTier = sorted.filter { it.displayName.trim().length == longestLength }
+
+                    if (topTier.size == 1) {
+                        val matched = topTier.first()
+                        val matchedName = matched.displayName.trim()
+                        val remainingMessage = if (rawInput.length > matchedName.length) {
+                            rawInput.substring(matchedName.length).trim()
+                        } else {
+                            null
+                        }
+                        val finalMsg = if (!explicitMessage.isNullOrBlank()) explicitMessage else remainingMessage
+                        return resolveCandidateDestinations(matched, finalMsg)
+                    } else {
+                        return ContactResolutionResult.Ambiguous(
+                            query = rawInput,
+                            candidates = topTier,
+                            message = explicitMessage
+                        )
+                    }
+                }
+
+                return resolveNameTarget(rawInput, isEmail = isEmail, explicitMessage = explicitMessage)
+            }
+        } catch (e: Exception) {
+            return ContactResolutionResult.ProviderError("Contacts provider error: ${e.message ?: "Unknown error"}")
         }
 
         return ContactResolutionResult.ResolutionRequired
     }
 
-    private fun resolveNameTarget(targetName: String, isEmail: Boolean, explicitMessage: String?): ContactResolutionResult {
+    private suspend fun resolveNameTarget(targetName: String, isEmail: Boolean, explicitMessage: String?): ContactResolutionResult {
         val candidates = contactsProvider.searchContacts(targetName, isEmail = isEmail)
         if (candidates.isEmpty()) {
             return ContactResolutionResult.NotFound

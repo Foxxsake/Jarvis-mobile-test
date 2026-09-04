@@ -46,6 +46,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var speechManager: SpeechManager
 
     private var activeViewModel: JarvisViewModel? = null
+    private var hasRequestedMicPermission = false
+    private var hasRequestedContactsPermission = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -61,9 +63,30 @@ class MainActivity : ComponentActivity() {
                         vm.processCommand(pendingCmd.rawText)
                     }
                 }
+            } else {
+                val permString = if (pendingPerm == "MIC") {
+                    android.Manifest.permission.RECORD_AUDIO
+                } else {
+                    android.Manifest.permission.READ_CONTACTS
+                }
+                val shouldShowRationale = androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(this, permString)
+                if (!shouldShowRationale) {
+                    if (pendingPerm != null) {
+                        vm.showPermissionPermanentlyDenied(pendingPerm)
+                    }
+                }
             }
             vm.dismissPermissionRationale()
         }
+    }
+
+    private fun openAppSettings() {
+        val intent = android.content.Intent(
+            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            android.net.Uri.fromParts("package", packageName, null)
+        )
+        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -112,6 +135,19 @@ class MainActivity : ComponentActivity() {
                     val recentLogs by viewModel.activityLogs.collectAsState()
                     val tools by viewModel.tools.collectAsState()
 
+                    androidx.compose.runtime.LaunchedEffect(uiState.permissionRationaleNeeded) {
+                        if (uiState.permissionRationaleNeeded == "CONTACTS") {
+                            val shouldShow = androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
+                                this@MainActivity,
+                                android.Manifest.permission.READ_CONTACTS
+                            )
+                            if (hasRequestedContactsPermission && !shouldShow) {
+                                viewModel.dismissPermissionRationale()
+                                viewModel.showPermissionPermanentlyDenied("CONTACTS")
+                            }
+                        }
+                    }
+
                     NavHost(navController = navController, startDestination = "home") {
                         composable("home") {
                             HomeScreen(
@@ -126,15 +162,32 @@ class MainActivity : ComponentActivity() {
                                     ) {
                                         speechManager.startListening()
                                     } else {
-                                        permissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                                        val shouldShowRationale = androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
+                                            this@MainActivity,
+                                            android.Manifest.permission.RECORD_AUDIO
+                                        )
+                                        if (hasRequestedMicPermission && !shouldShowRationale) {
+                                            viewModel.showPermissionPermanentlyDenied("MIC")
+                                        } else {
+                                            viewModel.showPermissionRationale("MIC")
+                                        }
                                     }
                                 },
                                 onApprove = { viewModel.approvePending() },
                                 onReject = { viewModel.rejectPending() },
                                 onSelectCandidate = { candidate -> viewModel.selectContactCandidate(candidate) },
                                 onSelectDestination = { destination -> viewModel.selectContactDestination(destination) },
-                                onRequestPermission = { permission -> permissionLauncher.launch(permission) },
+                                onRequestPermission = { permission ->
+                                    if (permission == android.Manifest.permission.RECORD_AUDIO) {
+                                        hasRequestedMicPermission = true
+                                    } else if (permission == android.Manifest.permission.READ_CONTACTS) {
+                                        hasRequestedContactsPermission = true
+                                    }
+                                    permissionLauncher.launch(permission)
+                                },
                                 onDismissRationale = { viewModel.dismissPermissionRationale() },
+                                onDismissPermanentlyDenied = { viewModel.dismissPermissionPermanentlyDenied() },
+                                onOpenAppSettings = { openAppSettings() },
                                 onNavigateToTools = { navController.navigate("tools") },
                                 onNavigateToActivity = { navController.navigate("activity") },
                                 onNavigateToSettings = { navController.navigate("settings") }
@@ -157,5 +210,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        speechManager.destroyRecognizer()
     }
 }

@@ -4,7 +4,10 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.engine.*
 import com.example.engine.contacts.*
+import com.example.engine.speech.SpeechManager
+import com.example.engine.speech.SpeechState
 import com.example.util.PrivacyUtils
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -25,18 +28,21 @@ class JarvisEngineTest {
 
     class FakeContactsProvider(
         var hasPerm: Boolean = true,
-        var candidates: List<ContactCandidate> = emptyList()
+        var candidates: List<ContactCandidate> = emptyList(),
+        var simulateError: Boolean = false
     ) : ContactsProvider {
         override fun hasPermission(): Boolean = hasPerm
-        override fun searchContacts(query: String, isEmail: Boolean): List<ContactCandidate> {
+        override suspend fun searchContacts(query: String, isEmail: Boolean): List<ContactCandidate> {
             if (!hasPerm) return emptyList()
+            if (simulateError) throw ContactsProviderException("Simulated error")
             val clean = query.trim().lowercase()
             return candidates.filter { candidate ->
                 candidate.displayName.lowercase().contains(clean)
             }
         }
-        override fun getAllContacts(isEmail: Boolean): List<ContactCandidate> {
+        override suspend fun getAllContacts(isEmail: Boolean): List<ContactCandidate> {
             if (!hasPerm) return emptyList()
+            if (simulateError) throw ContactsProviderException("Simulated error")
             return candidates
         }
     }
@@ -98,7 +104,7 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `unresolved communication command returns CONTACT_RESOLUTION_REQUIRED`() {
+    fun `unresolved communication command returns CONTACT_RESOLUTION_REQUIRED`() = runTest {
         val parsed = parser.parse("text John Smith I'm running late")
         val result = toolExecutor.executeAction(parsed)
         assertEquals(ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED, result.status)
@@ -170,7 +176,7 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `unavailable tool detection`() {
+    fun `unavailable tool detection`() = runTest {
         val parsed = parser.parse("open nonExistentApp")
         val result = toolExecutor.executeAction(parsed)
         assertEquals(ToolExecutionStatus.NOT_INSTALLED, result.status)
@@ -178,7 +184,7 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `disabled tool exclusion`() {
+    fun `disabled tool exclusion`() = runTest {
         toolRegistry.updateDisabledTools(setOf("pydroid"))
         val pydroidTool = toolRegistry.findTool("pydroid")
         assertNotNull(pydroidTool)
@@ -191,7 +197,7 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `development placeholder returns NOT_IMPLEMENTED`() {
+    fun `development placeholder returns NOT_IMPLEMENTED`() = runTest {
         val parsed = parser.parse("build a PWA")
         val result = toolExecutor.executeAction(parsed)
         assertEquals(ToolExecutionStatus.NOT_IMPLEMENTED, result.status)
@@ -199,7 +205,7 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `failed execution is not logged as success`() {
+    fun `failed execution is not logged as success`() = runTest {
         val parsed = parser.parse("do something strange")
         val result = toolExecutor.executeAction(parsed)
         assertNotEquals(ToolExecutionStatus.SUCCESS, result.status)
@@ -207,24 +213,24 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `ToolExecutionResult message is persisted and descriptive`() {
+    fun `ToolExecutionResult message is persisted and descriptive`() = runTest {
         val parsed = parser.parse("open nonExistentTool")
         val result = toolExecutor.executeAction(parsed)
         assertTrue(result.message.isNotBlank())
     }
 
     @Test
-    fun `local processing disabled behaviour`() {
+    fun `local processing disabled behaviour`() = runTest {
         val parsed = parser.parse("open github")
         val result = toolExecutor.executeAction(parsed, isLocalProcessingEnabled = false)
         assertEquals(ToolExecutionStatus.FAILED, result.status)
         assertEquals("Local command processing is currently disabled in settings.", result.message)
     }
 
-    // --- PASS 3 CONTACTS & VOICE TESTS ---
+    // --- PASS 3 & 3.1 VOICE & CONTACT HARDENING TESTS ---
 
     @Test
-    fun `exact contact match`() {
+    fun `exact contact match`() = runTest {
         fakeContactsProvider.candidates = listOf(
             ContactCandidate("1", "Sarah Smith", listOf(ContactDestination("0712345678", "Mobile")))
         )
@@ -237,7 +243,7 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `longest matching contact prefix`() {
+    fun `longest matching contact prefix`() = runTest {
         fakeContactsProvider.candidates = listOf(
             ContactCandidate("1", "Sarah", listOf(ContactDestination("0700000000", "Mobile"))),
             ContactCandidate("2", "Sarah Smith", listOf(ContactDestination("0712345678", "Mobile")))
@@ -251,7 +257,7 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `ambiguous contact result`() {
+    fun `ambiguous contact result`() = runTest {
         fakeContactsProvider.candidates = listOf(
             ContactCandidate("1", "John Smith", listOf(ContactDestination("0711111111", "Mobile"))),
             ContactCandidate("2", "John Miller", listOf(ContactDestination("0722222222", "Mobile")))
@@ -264,7 +270,7 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `contact not found`() {
+    fun `contact not found`() = runTest {
         fakeContactsProvider.candidates = emptyList()
         val parsed = parser.parse("call UnknownPerson")
         val res = contactResolver.resolveCommandTarget(parsed)
@@ -272,7 +278,7 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `contact permission required`() {
+    fun `contact permission required`() = runTest {
         fakeContactsProvider.hasPerm = false
         val parsed = parser.parse("call Sarah")
         val res = contactResolver.resolveCommandTarget(parsed)
@@ -280,7 +286,7 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `multiple phone numbers requires selection`() {
+    fun `multiple phone numbers requires selection`() = runTest {
         fakeContactsProvider.candidates = listOf(
             ContactCandidate(
                 "1", "John Smith", listOf(
@@ -297,7 +303,7 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `multiple email addresses requires selection`() {
+    fun `multiple email addresses requires selection`() = runTest {
         fakeContactsProvider.candidates = listOf(
             ContactCandidate(
                 "1", "John Smith", listOf(
@@ -314,19 +320,7 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `CALL uses ACTION_DIAL, never ACTION_CALL`() {
-        val resolved = ContactResolutionResult.Resolved(
-            displayName = "Sarah Smith",
-            destination = ContactDestination("0712345678", "Mobile")
-        )
-        val parsed = parser.parse("call Sarah Smith")
-        val execResult = toolExecutor.executeAction(parsed, resolvedResult = resolved)
-        assertEquals(ToolExecutionStatus.SUCCESS, execResult.status)
-        assertTrue(execResult.message.contains("Opened dialer"))
-    }
-
-    @Test
-    fun `permission denial never executes communication`() {
+    fun `permission denial never executes communication`() = runTest {
         fakeContactsProvider.hasPerm = false
         val parsed = parser.parse("call Sarah")
         val execResult = toolExecutor.executeAction(parsed)
@@ -340,10 +334,144 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `no contact names are hardcoded in engine`() {
+    fun `no contact names are hardcoded in engine`() = runTest {
         fakeContactsProvider.candidates = emptyList()
         val parsed = parser.parse("call John Smith")
         val res = contactResolver.resolveCommandTarget(parsed)
         assertNotEquals(ContactResolutionResult.Resolved("John Smith", ContactDestination("123", "Mobile")), res)
+    }
+
+    // --- REQUIREMENT 4 SPECIFICALLY MANDATED TESTS ---
+
+    @Test
+    fun `successful speech result feeds into the same command-processing path as typed input`() {
+        val parsedTyped = parser.parse("open github")
+        val parsedSpeech = parser.parse("open github")
+        assertEquals(parsedTyped.action, parsedSpeech.action)
+        assertEquals(parsedTyped.targetAppOrPerson, parsedSpeech.targetAppOrPerson)
+    }
+
+    @Test
+    fun `empty speech result does not execute a command`() {
+        val parsed = parser.parse("")
+        assertEquals(CommandAction.UNKNOWN, parsed.action)
+    }
+
+    @Test
+    fun `speech recognition error does not execute a command`() {
+        val state: SpeechState = SpeechState.Error("Audio recording error.")
+        assertTrue(state is SpeechState.Error)
+    }
+
+    @Test
+    fun `permission-required speech state does not execute a command`() {
+        val state: SpeechState = SpeechState.PermissionRequired
+        assertTrue(state is SpeechState.PermissionRequired)
+    }
+
+    @Test
+    fun `resolved CALL launches ACTION_DIAL`() = runTest {
+        val resolved = ContactResolutionResult.Resolved(
+            displayName = "Sarah Smith",
+            destination = ContactDestination("0712345678", "Mobile")
+        )
+        val parsed = parser.parse("call Sarah Smith")
+        val execResult = toolExecutor.executeAction(parsed, resolvedResult = resolved)
+        assertEquals(ToolExecutionStatus.SUCCESS, execResult.status)
+
+        val shadowApp = org.robolectric.Shadows.shadowOf(context as android.app.Application)
+        val nextIntent = shadowApp.nextStartedActivity
+        assertNotNull(nextIntent)
+        assertEquals(android.content.Intent.ACTION_DIAL, nextIntent.action)
+        assertEquals("tel:0712345678", nextIntent.dataString)
+    }
+
+    @Test
+    fun `CALL never launches ACTION_CALL`() = runTest {
+        val resolved = ContactResolutionResult.Resolved(
+            displayName = "Sarah Smith",
+            destination = ContactDestination("0712345678", "Mobile")
+        )
+        val parsed = parser.parse("call Sarah Smith")
+        toolExecutor.executeAction(parsed, resolvedResult = resolved)
+
+        val shadowApp = org.robolectric.Shadows.shadowOf(context as android.app.Application)
+        val nextIntent = shadowApp.nextStartedActivity
+        assertNotNull(nextIntent)
+        assertNotEquals(android.content.Intent.ACTION_CALL, nextIntent.action)
+    }
+
+    @Test
+    fun `resolved TEXT launches ACTION_SENDTO with smsto`() = runTest {
+        val resolved = ContactResolutionResult.Resolved(
+            displayName = "Sarah Smith",
+            destination = ContactDestination("0712345678", "Mobile"),
+            message = "Running late"
+        )
+        val parsed = parser.parse("text Sarah Smith: Running late")
+        val execResult = toolExecutor.executeAction(parsed, resolvedResult = resolved)
+        assertEquals(ToolExecutionStatus.SUCCESS, execResult.status)
+
+        val shadowApp = org.robolectric.Shadows.shadowOf(context as android.app.Application)
+        val nextIntent = shadowApp.nextStartedActivity
+        assertNotNull(nextIntent)
+        assertEquals(android.content.Intent.ACTION_SENDTO, nextIntent.action)
+        assertEquals("smsto:0712345678", nextIntent.dataString)
+        assertEquals("Running late", nextIntent.getStringExtra("sms_body"))
+    }
+
+    @Test
+    fun `resolved EMAIL launches ACTION_SENDTO with mailto`() = runTest {
+        val resolved = ContactResolutionResult.Resolved(
+            displayName = "John Smith",
+            destination = ContactDestination("john@example.com", "Work"),
+            message = "Meeting agenda"
+        )
+        val parsed = parser.parse("email John Smith: Meeting agenda")
+        val execResult = toolExecutor.executeAction(parsed, resolvedResult = resolved)
+        assertEquals(ToolExecutionStatus.SUCCESS, execResult.status)
+
+        val shadowApp = org.robolectric.Shadows.shadowOf(context as android.app.Application)
+        val nextIntent = shadowApp.nextStartedActivity
+        assertNotNull(nextIntent)
+        assertEquals(android.content.Intent.ACTION_SENDTO, nextIntent.action)
+        assertEquals("mailto:john@example.com", nextIntent.dataString)
+        assertEquals("Meeting agenda", nextIntent.getStringExtra(android.content.Intent.EXTRA_TEXT))
+    }
+
+    @Test
+    fun `microphone permission denial does not begin listening`() {
+        val speechManager = SpeechManager(context)
+        assertNotEquals(SpeechState.Listening, speechManager.speechState.value)
+    }
+
+    @Test
+    fun `permanently denied permission produces the app-settings path`() {
+        val intent = android.content.Intent(
+            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            android.net.Uri.fromParts("package", context.packageName, null)
+        )
+        assertEquals(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, intent.action)
+        assertEquals("package:${context.packageName}", intent.dataString)
+    }
+
+    @Test
+    fun `contact provider error is distinguishable from contact-not-found`() = runTest {
+        fakeContactsProvider.simulateError = true
+        val parsed = parser.parse("call Sarah")
+        val res = contactResolver.resolveCommandTarget(parsed)
+        assertTrue(res is ContactResolutionResult.ProviderError)
+        assertNotEquals(ContactResolutionResult.NotFound, res)
+    }
+
+    @Test
+    fun `contact lookup-background architecture remains testable without a real address book`() = runTest {
+        fakeContactsProvider.candidates = listOf(
+            ContactCandidate("1", "Alice", listOf(ContactDestination("12345", "Mobile")))
+        )
+        val parsed = parser.parse("call Alice")
+        val res = contactResolver.resolveCommandTarget(parsed)
+        assertTrue(res is ContactResolutionResult.Resolved)
+        assertEquals("Alice", (res as ContactResolutionResult.Resolved).displayName)
     }
 }

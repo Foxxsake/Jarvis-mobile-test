@@ -37,6 +37,7 @@ data class JarvisUiState(
     val multipleDestinationsName: String? = null,
     val pendingMessageForDestination: String? = null,
     val permissionRationaleNeeded: String? = null, // "MIC" or "CONTACTS"
+    val permissionPermanentlyDenied: String? = null, // "MIC" or "CONTACTS"
     val lastRecognizedText: String = ""
 )
 
@@ -118,48 +119,51 @@ class JarvisViewModel(
     fun processCommand(text: String) {
         if (text.isBlank()) return
 
-        val isLocalEnabled = localProcessingEnabled.value
-        val parsed = commandParser.parse(text)
+        viewModelScope.launch {
+            val isLocalEnabled = localProcessingEnabled.value
+            val parsed = commandParser.parse(text)
 
-        if (!isLocalEnabled) {
-            _uiState.value = _uiState.value.copy(status = "Local processing disabled")
-            logActivity(
-                parsed,
-                "Local processing disabled",
-                ToolExecutionStatus.FAILED.name,
-                "Local command processing is currently disabled in settings."
-            )
-            return
-        }
+            if (!isLocalEnabled) {
+                _uiState.value = _uiState.value.copy(status = "Local processing disabled")
+                logActivity(
+                    parsed,
+                    "Local processing disabled",
+                    ToolExecutionStatus.FAILED.name,
+                    "Local command processing is currently disabled in settings."
+                )
+                return@launch
+            }
 
-        _uiState.value = _uiState.value.copy(
-            status = "Planning",
-            ambiguousCandidates = null,
-            ambiguousQuery = null,
-            multipleDestinations = null,
-            multipleDestinationsName = null,
-            permissionRationaleNeeded = null
-        )
-
-        if (parsed.action == CommandAction.CALL ||
-            parsed.action == CommandAction.TEXT ||
-            parsed.action == CommandAction.EMAIL
-        ) {
-            val resolution = contactResolver.resolveCommandTarget(parsed)
-            handleContactResolution(parsed, resolution)
-            return
-        }
-
-        val plan = taskRouter.route(parsed)
-
-        if (parsed.requiresApproval) {
             _uiState.value = _uiState.value.copy(
-                status = "Waiting for approval",
-                pendingApproval = parsed,
-                planToApprove = plan.steps.joinToString("\n")
+                status = "Planning",
+                ambiguousCandidates = null,
+                ambiguousQuery = null,
+                multipleDestinations = null,
+                multipleDestinationsName = null,
+                permissionRationaleNeeded = null,
+                permissionPermanentlyDenied = null
             )
-        } else {
-            execute(parsed, plan.steps.joinToString(", "))
+
+            if (parsed.action == CommandAction.CALL ||
+                parsed.action == CommandAction.TEXT ||
+                parsed.action == CommandAction.EMAIL
+            ) {
+                val resolution = contactResolver.resolveCommandTarget(parsed)
+                handleContactResolution(parsed, resolution)
+                return@launch
+            }
+
+            val plan = taskRouter.route(parsed)
+
+            if (parsed.requiresApproval) {
+                _uiState.value = _uiState.value.copy(
+                    status = "Waiting for approval",
+                    pendingApproval = parsed,
+                    planToApprove = plan.steps.joinToString("\n")
+                )
+            } else {
+                execute(parsed, plan.steps.joinToString(", "))
+            }
         }
     }
 
@@ -171,6 +175,15 @@ class JarvisViewModel(
                     permissionRationaleNeeded = "CONTACTS",
                     pendingApproval = parsed
                 )
+            }
+            is ContactResolutionResult.ProviderError -> {
+                logActivity(
+                    parsed,
+                    "Contact lookup",
+                    ToolExecutionStatus.FAILED.name,
+                    resolution.message
+                )
+                _uiState.value = _uiState.value.copy(status = "Contacts provider error")
             }
             is ContactResolutionResult.Ambiguous -> {
                 _uiState.value = _uiState.value.copy(
@@ -265,7 +278,9 @@ class JarvisViewModel(
         val resolved = _uiState.value.resolvedContact
 
         if (pending != null) {
-            execute(pending, planText ?: "", resolved)
+            viewModelScope.launch {
+                execute(pending, planText ?: "", resolved)
+            }
         }
         clearApproval()
     }
@@ -287,6 +302,18 @@ class JarvisViewModel(
         _uiState.value = _uiState.value.copy(permissionRationaleNeeded = null)
     }
 
+    fun showPermissionRationale(permType: String) {
+        _uiState.value = _uiState.value.copy(permissionRationaleNeeded = permType)
+    }
+
+    fun showPermissionPermanentlyDenied(permType: String) {
+        _uiState.value = _uiState.value.copy(permissionPermanentlyDenied = permType)
+    }
+
+    fun dismissPermissionPermanentlyDenied() {
+        _uiState.value = _uiState.value.copy(permissionPermanentlyDenied = null)
+    }
+
     private fun clearApproval() {
         _uiState.value = _uiState.value.copy(
             status = "Ready",
@@ -301,7 +328,7 @@ class JarvisViewModel(
         )
     }
 
-    private fun execute(
+    private suspend fun execute(
         command: ParsedCommand,
         planText: String,
         resolvedContact: ContactResolutionResult.Resolved? = null

@@ -30,7 +30,13 @@ sealed class ContactResolutionResult {
         val message: String? = null
     ) : ContactResolutionResult()
 
+    data class ProviderError(
+        val message: String = "Unable to access contacts on device."
+    ) : ContactResolutionResult()
+
     object NotFound : ContactResolutionResult()
     object PermissionRequired : ContactResolutionResult()
     object ResolutionRequired : ContactResolutionResult()
 }
+
+class ContactsProviderException(message: String, cause: Throwable? = null) : Exception(message, cause)

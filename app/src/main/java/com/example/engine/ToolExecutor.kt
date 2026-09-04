@@ -26,7 +26,7 @@ class ToolExecutor(
     private val toolRegistry: ToolRegistry,
     private val contactResolver: ContactResolver
 ) {
-    fun executeAction(
+    suspend fun executeAction(
         command: ParsedCommand,
         resolvedResult: ContactResolutionResult? = null,
         isLocalProcessingEnabled: Boolean = true
@@ -148,18 +148,18 @@ class ToolExecutor(
         return ToolExecutionResult(ToolExecutionStatus.NOT_INSTALLED, "GitHub app is not installed or enabled.")
     }
 
-    private fun handleCommunication(
+    private suspend fun handleCommunication(
         command: ParsedCommand,
         providedResolution: ContactResolutionResult?
     ): ToolExecutionResult {
         val resolution = providedResolution ?: contactResolver.resolveCommandTarget(command)
 
-        when (resolution) {
+        return when (resolution) {
             is ContactResolutionResult.Resolved -> {
                 val destValue = resolution.destination.value
                 val maskedDest = if (command.action == CommandAction.EMAIL) destValue else PrivacyUtils.maskPhoneNumber(destValue)
 
-                return when (command.action) {
+                when (command.action) {
                     CommandAction.CALL -> {
                         val intent = Intent(Intent.ACTION_DIAL).apply {
                             data = Uri.parse("tel:$destValue")
@@ -214,36 +214,43 @@ class ToolExecutor(
                 }
             }
 
+            is ContactResolutionResult.ProviderError -> {
+                ToolExecutionResult(
+                    ToolExecutionStatus.FAILED,
+                    resolution.message
+                )
+            }
+
             ContactResolutionResult.PermissionRequired -> {
-                return ToolExecutionResult(
+                ToolExecutionResult(
                     ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED,
                     "Contacts permission required to resolve contact."
                 )
             }
 
             ContactResolutionResult.NotFound -> {
-                return ToolExecutionResult(
+                ToolExecutionResult(
                     ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED,
                     "Contact not found."
                 )
             }
 
             is ContactResolutionResult.Ambiguous -> {
-                return ToolExecutionResult(
+                ToolExecutionResult(
                     ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED,
                     "Multiple contact candidates found. Selection required."
                 )
             }
 
             is ContactResolutionResult.MultipleDestinations -> {
-                return ToolExecutionResult(
+                ToolExecutionResult(
                     ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED,
                     "Multiple destinations found. Selection required."
                 )
             }
 
             ContactResolutionResult.ResolutionRequired -> {
-                return ToolExecutionResult(
+                ToolExecutionResult(
                     ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED,
                     "Contact name or details missing."
                 )
