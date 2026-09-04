@@ -884,4 +884,85 @@ class JarvisEngineTest {
         assertTrue(result.message.contains("TestProject"))
         assertTrue(result.message.lowercase().contains("working tree clean"))
     }
+
+    // --- PASS 4.1 TESTS: TERMUX BUNDLE PARSING & PROBE TESTS ---
+
+    @Test
+    fun `parseResultBundle extracts stdout and exitCode from EXTRA_PLUGIN_RESULT_BUNDLE`() {
+        val worker = com.example.engine.termux.AndroidTermuxWorker(context)
+        val bundle = android.os.Bundle().apply {
+            putString(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_STDOUT, "u0_a245\n")
+            putString(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_STDERR, "")
+            putInt(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_EXIT_CODE, 0)
+            putInt(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_ERR_CODE, 0)
+            putString(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_ERR_MSG, "")
+        }
+        val intent = android.content.Intent().apply {
+            putExtra(com.example.engine.termux.TermuxConstants.EXTRA_PLUGIN_RESULT_BUNDLE, bundle)
+        }
+
+        val parsed = worker.parseResultBundle(intent, 1000L, 1050L)
+
+        assertEquals(com.example.engine.termux.TermuxExecutionStatus.SUCCESS, parsed.status)
+        assertEquals(0, parsed.exitCode)
+        assertEquals("u0_a245\n", parsed.stdout)
+        assertEquals("u0_a245", parsed.message)
+    }
+
+    @Test
+    fun `parseResultBundle detects allow-external-apps disabled as SETUP_REQUIRED`() {
+        val worker = com.example.engine.termux.AndroidTermuxWorker(context)
+        val bundle = android.os.Bundle().apply {
+            putString(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_STDOUT, "")
+            putString(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_STDERR, "")
+            putInt(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_EXIT_CODE, -1)
+            putInt(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_ERR_CODE, 1)
+            putString(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_ERR_MSG, "Execution of external apps is disabled")
+        }
+        val intent = android.content.Intent().apply {
+            putExtra(com.example.engine.termux.TermuxConstants.EXTRA_PLUGIN_RESULT_BUNDLE, bundle)
+        }
+
+        val parsed = worker.parseResultBundle(intent, 1000L, 1050L)
+
+        assertEquals(com.example.engine.termux.TermuxExecutionStatus.SETUP_REQUIRED, parsed.status)
+        assertTrue(parsed.message.contains("allow-external-apps=true"))
+    }
+
+    @Test
+    fun `parseResultBundle supports EXTRA_PLUGIN_RESULT_BUNDLE_ALT fallback`() {
+        val worker = com.example.engine.termux.AndroidTermuxWorker(context)
+        val bundle = android.os.Bundle().apply {
+            putString(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_STDOUT, "git version 2.43.0")
+            putInt(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_EXIT_CODE, 0)
+            putInt(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_ERR_CODE, 0)
+        }
+        val intent = android.content.Intent().apply {
+            putExtra(com.example.engine.termux.TermuxConstants.EXTRA_PLUGIN_RESULT_BUNDLE_ALT, bundle)
+        }
+
+        val parsed = worker.parseResultBundle(intent, 1000L, 1050L)
+
+        assertEquals(com.example.engine.termux.TermuxExecutionStatus.SUCCESS, parsed.status)
+        assertEquals("git version 2.43.0", parsed.stdout)
+    }
+
+    @Test
+    fun `fake worker probeConnection transition to READY`() = runTest {
+        val fakeWorker = com.example.engine.termux.FakeTermuxWorker(
+            mockConnectionStatus = com.example.engine.termux.TermuxConnectionStatus(
+                isInstalled = true,
+                isPermissionGranted = true,
+                isExternalAppsAllowed = false,
+                connectionState = com.example.engine.termux.TermuxConnectionState.UNVERIFIED
+            )
+        )
+
+        val probed = fakeWorker.probeConnection()
+
+        assertEquals(com.example.engine.termux.TermuxConnectionState.READY, probed.connectionState)
+        assertTrue(probed.isExternalAppsAllowed)
+        assertTrue(probed.detailMessage!!.contains("verified working"))
+    }
 }
+

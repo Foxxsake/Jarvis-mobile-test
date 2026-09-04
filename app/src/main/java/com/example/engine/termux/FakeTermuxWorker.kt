@@ -5,13 +5,43 @@ class FakeTermuxWorker(
         isInstalled = true,
         isPermissionGranted = true,
         isExternalAppsAllowed = true,
-        connectionState = TermuxConnectionState.TERMUX_READY
+        connectionState = TermuxConnectionState.READY,
+        termuxVersion = "0.118.0",
+        detailMessage = "Termux bridge verified working."
     )
 ) : TermuxWorker {
 
     val executedRequests = mutableListOf<TermuxCommandRequest>()
 
     override fun checkConnectionState(): TermuxConnectionStatus {
+        return mockConnectionStatus
+    }
+
+    override suspend fun probeConnection(): TermuxConnectionStatus {
+        if (mockConnectionStatus.connectionState == TermuxConnectionState.UNVERIFIED) {
+            val req = TermuxCommandRequest(
+                executablePath = "/data/data/com.termux/files/usr/bin/whoami",
+                description = "Probe Connection"
+            )
+            val res = executeCommand(req)
+            if (res.status == TermuxExecutionStatus.SUCCESS) {
+                mockConnectionStatus = mockConnectionStatus.copy(
+                    isExternalAppsAllowed = true,
+                    connectionState = TermuxConnectionState.READY,
+                    detailMessage = "Termux bridge verified working."
+                )
+            } else if (res.status == TermuxExecutionStatus.SETUP_REQUIRED) {
+                mockConnectionStatus = mockConnectionStatus.copy(
+                    connectionState = TermuxConnectionState.SETUP_REQUIRED,
+                    detailMessage = res.message
+                )
+            } else {
+                mockConnectionStatus = mockConnectionStatus.copy(
+                    connectionState = TermuxConnectionState.FAILED,
+                    detailMessage = res.message
+                )
+            }
+        }
         return mockConnectionStatus
     }
 
@@ -25,19 +55,25 @@ class FakeTermuxWorker(
                     message = "Termux application is not installed on this device."
                 )
             }
+            TermuxConnectionState.TERMUX_TOO_OLD -> {
+                return TermuxExecutionResult(
+                    status = TermuxExecutionStatus.TERMUX_TOO_OLD,
+                    message = "Termux version ${mockConnectionStatus.termuxVersion ?: "unknown"} is too old. Version 0.109+ is required."
+                )
+            }
             TermuxConnectionState.TERMUX_PERMISSION_REQUIRED -> {
                 return TermuxExecutionResult(
                     status = TermuxExecutionStatus.PERMISSION_REQUIRED,
                     message = "RUN_COMMAND permission is required to execute Termux actions."
                 )
             }
-            TermuxConnectionState.TERMUX_EXTERNAL_APPS_DISABLED -> {
+            TermuxConnectionState.SETUP_REQUIRED -> {
                 return TermuxExecutionResult(
                     status = TermuxExecutionStatus.SETUP_REQUIRED,
                     message = "External app execution is disabled in Termux settings (~/.termux/termux.properties)."
                 )
             }
-            TermuxConnectionState.TERMUX_READY -> { /* Proceed */ }
+            TermuxConnectionState.READY, TermuxConnectionState.UNVERIFIED, TermuxConnectionState.FAILED -> { /* Proceed */ }
         }
 
         if (!TermuxCommandClassifier.isExecutableAllowed(request.executablePath)) {
@@ -139,3 +175,4 @@ class FakeTermuxWorker(
         }
     }
 }
+

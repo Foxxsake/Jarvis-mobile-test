@@ -27,7 +27,7 @@ class CommandParser(
 
             if (parsedSingle.action == CommandAction.UNKNOWN) {
                 if (actions.isNotEmpty()) {
-                    val last = actions.removeLast()
+                    val last = actions.removeAt(actions.lastIndex)
                     actions.add(last.copy(
                         followUp = (last.followUp?.let { "$it and " } ?: "") + remainingText,
                         rawArguments = (last.rawArguments?.let { "$it and " } ?: "") + remainingText,

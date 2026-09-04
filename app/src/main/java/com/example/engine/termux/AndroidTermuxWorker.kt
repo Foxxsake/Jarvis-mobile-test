@@ -1,5 +1,6 @@
 package com.example.engine.termux
 
+import android.app.Activity
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -7,81 +8,151 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Bundle
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.UUID
 
 class AndroidTermuxWorker(
     private val context: Context
 ) : TermuxWorker {
 
-    companion object {
-        const val TERMUX_PACKAGE = "com.termux"
-        const val RUN_COMMAND_PERMISSION = "com.termux.permission.RUN_COMMAND"
-        const val ACTION_RUN_COMMAND = "com.termux.RUN_COMMAND"
-        const val RUN_COMMAND_SERVICE = "com.termux.app.RunCommandService"
-        const val ACTION_RESULT_CALLBACK = "com.example.jarvis.TERMUX_RESULT_CALLBACK"
+    @Volatile
+    private var lastVerifiedState: TermuxConnectionState = TermuxConnectionState.UNVERIFIED
 
-        const val EXTRA_PATH = "com.termux.RUN_COMMAND_PATH"
-        const val EXTRA_ARGUMENTS = "com.termux.RUN_COMMAND_ARGUMENTS"
-        const val EXTRA_WORKDIR = "com.termux.RUN_COMMAND_WORKDIR"
-        const val EXTRA_BACKGROUND = "com.termux.RUN_COMMAND_BACKGROUND"
-        const val EXTRA_DESCRIPTION = "com.termux.RUN_COMMAND_DESCRIPTION"
-        const val EXTRA_PENDING_INTENT = "com.termux.RUN_COMMAND_PENDING_INTENT"
-
-        const val RESULT_STDOUT = "stdout"
-        const val RESULT_STDERR = "stderr"
-        const val RESULT_EXIT_CODE = "exitCode"
-        const val RESULT_ERR_CODE = "errCode"
-        const val RESULT_ERR_MSG = "errmsg"
-    }
+    @Volatile
+    private var lastDetailMessage: String? = "Connection unverified. Tap 'Check Termux Connection' to probe."
 
     override fun checkConnectionState(): TermuxConnectionStatus {
-        val isInstalled = try {
-            context.packageManager.getPackageInfo(TERMUX_PACKAGE, 0)
-            true
-        } catch (e: Exception) {
-            false
+        val (isInstalled, versionName) = getTermuxPackageInfo()
+
+        if (!isInstalled) {
+            lastVerifiedState = TermuxConnectionState.TERMUX_NOT_INSTALLED
+            lastDetailMessage = "Termux application is not installed."
+            return TermuxConnectionStatus(
+                isInstalled = false,
+                isPermissionGranted = false,
+                isExternalAppsAllowed = false,
+                connectionState = TermuxConnectionState.TERMUX_NOT_INSTALLED,
+                termuxVersion = null,
+                detailMessage = lastDetailMessage
+            )
+        }
+
+        if (!isVersionSupported(versionName)) {
+            lastVerifiedState = TermuxConnectionState.TERMUX_TOO_OLD
+            lastDetailMessage = "Termux version $versionName is too old. Version ${TermuxConstants.MIN_REQUIRED_VERSION} or newer is required."
+            return TermuxConnectionStatus(
+                isInstalled = true,
+                isPermissionGranted = false,
+                isExternalAppsAllowed = false,
+                connectionState = TermuxConnectionState.TERMUX_TOO_OLD,
+                termuxVersion = versionName,
+                detailMessage = lastDetailMessage
+            )
         }
 
         val isPermissionGranted = ContextCompat.checkSelfPermission(
             context,
-            RUN_COMMAND_PERMISSION
+            TermuxConstants.RUN_COMMAND_PERMISSION
         ) == PackageManager.PERMISSION_GRANTED
 
-        val connectionState = when {
-            !isInstalled -> TermuxConnectionState.TERMUX_NOT_INSTALLED
-            !isPermissionGranted -> TermuxConnectionState.TERMUX_PERMISSION_REQUIRED
-            else -> TermuxConnectionState.TERMUX_READY
+        if (!isPermissionGranted) {
+            lastVerifiedState = TermuxConnectionState.TERMUX_PERMISSION_REQUIRED
+            lastDetailMessage = "RUN_COMMAND permission is required."
+            return TermuxConnectionStatus(
+                isInstalled = true,
+                isPermissionGranted = false,
+                isExternalAppsAllowed = false,
+                connectionState = TermuxConnectionState.TERMUX_PERMISSION_REQUIRED,
+                termuxVersion = versionName,
+                detailMessage = lastDetailMessage
+            )
+        }
+
+        val state = if (lastVerifiedState == TermuxConnectionState.READY ||
+            lastVerifiedState == TermuxConnectionState.SETUP_REQUIRED ||
+            lastVerifiedState == TermuxConnectionState.FAILED
+        ) {
+            lastVerifiedState
+        } else {
+            TermuxConnectionState.UNVERIFIED
         }
 
         return TermuxConnectionStatus(
-            isInstalled = isInstalled,
-            isPermissionGranted = isPermissionGranted,
-            isExternalAppsAllowed = isPermissionGranted && isInstalled,
-            connectionState = connectionState
+            isInstalled = true,
+            isPermissionGranted = true,
+            isExternalAppsAllowed = (state == TermuxConnectionState.READY),
+            connectionState = state,
+            termuxVersion = versionName,
+            detailMessage = lastDetailMessage
         )
     }
 
+    override suspend fun probeConnection(): TermuxConnectionStatus {
+        val currentStatus = checkConnectionState()
+        if (currentStatus.connectionState == TermuxConnectionState.TERMUX_NOT_INSTALLED ||
+            currentStatus.connectionState == TermuxConnectionState.TERMUX_TOO_OLD ||
+            currentStatus.connectionState == TermuxConnectionState.TERMUX_PERMISSION_REQUIRED
+        ) {
+            return currentStatus
+        }
+
+        val probeRequest = TermuxCommandRequest(
+            executablePath = "/data/data/com.termux/files/usr/bin/whoami",
+            arguments = emptyList(),
+            background = true,
+            description = "Termux Connection Probe",
+            riskLevel = TermuxRiskLevel.READ_ONLY
+        )
+
+        val probeResult = executeCommandInternal(probeRequest, isProbe = true)
+
+        when (probeResult.status) {
+            TermuxExecutionStatus.SUCCESS -> {
+                lastVerifiedState = TermuxConnectionState.READY
+                lastDetailMessage = "Termux command bridge verified working. (${probeResult.stdout.trim()})"
+            }
+            TermuxExecutionStatus.SETUP_REQUIRED -> {
+                lastVerifiedState = TermuxConnectionState.SETUP_REQUIRED
+                lastDetailMessage = probeResult.message
+            }
+            else -> {
+                lastVerifiedState = TermuxConnectionState.FAILED
+                lastDetailMessage = "Probe failed: ${probeResult.message}"
+            }
+        }
+
+        return checkConnectionState()
+    }
+
     override suspend fun executeCommand(request: TermuxCommandRequest): TermuxExecutionResult {
-        val connection = checkConnectionState()
-        if (connection.connectionState != TermuxConnectionState.TERMUX_READY) {
-            return when (connection.connectionState) {
-                TermuxConnectionState.TERMUX_NOT_INSTALLED -> TermuxExecutionResult(
+        return executeCommandInternal(request, isProbe = false)
+    }
+
+    private suspend fun executeCommandInternal(
+        request: TermuxCommandRequest,
+        isProbe: Boolean
+    ): TermuxExecutionResult {
+        if (!isProbe) {
+            val connection = checkConnectionState()
+            if (connection.connectionState == TermuxConnectionState.TERMUX_NOT_INSTALLED) {
+                return TermuxExecutionResult(
                     status = TermuxExecutionStatus.TERMUX_NOT_INSTALLED,
                     message = "Termux application is not installed."
                 )
-                TermuxConnectionState.TERMUX_PERMISSION_REQUIRED -> TermuxExecutionResult(
+            }
+            if (connection.connectionState == TermuxConnectionState.TERMUX_TOO_OLD) {
+                return TermuxExecutionResult(
+                    status = TermuxExecutionStatus.TERMUX_TOO_OLD,
+                    message = connection.detailMessage ?: "Termux version is too old."
+                )
+            }
+            if (connection.connectionState == TermuxConnectionState.TERMUX_PERMISSION_REQUIRED) {
+                return TermuxExecutionResult(
                     status = TermuxExecutionStatus.PERMISSION_REQUIRED,
                     message = "RUN_COMMAND permission is required for Termux execution."
-                )
-                TermuxConnectionState.TERMUX_EXTERNAL_APPS_DISABLED -> TermuxExecutionResult(
-                    status = TermuxExecutionStatus.SETUP_REQUIRED,
-                    message = "External app execution is disabled in Termux settings."
-                )
-                else -> TermuxExecutionResult(
-                    status = TermuxExecutionStatus.FAILED,
-                    message = "Termux connection is not ready."
                 )
             }
         }
@@ -95,16 +166,18 @@ class AndroidTermuxWorker(
 
         val startTime = System.currentTimeMillis()
         val resultChannel = Channel<TermuxExecutionResult>(1)
-        val requestCode = (1000..9999).random()
+        val executionId = UUID.randomUUID().toString()
+        val requestCode = executionId.hashCode() and 0x00FFFFFF
 
-        val callbackIntent = Intent(ACTION_RESULT_CALLBACK).apply {
-            `package` = context.packageName
+        val callbackIntent = Intent(TermuxConstants.ACTION_RESULT_CALLBACK).apply {
+            setPackage(context.packageName)
+            putExtra("EXECUTION_ID", executionId)
         }
 
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_MUTABLE
         } else {
-            PendingIntent.FLAG_UPDATE_CURRENT
+            PendingIntent.FLAG_ONE_SHOT
         }
 
         val pendingIntent = PendingIntent.getBroadcast(
@@ -117,82 +190,52 @@ class AndroidTermuxWorker(
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(c: Context?, intent: Intent?) {
                 if (intent == null) return
-                val stdout = intent.getStringExtra(RESULT_STDOUT) ?: ""
-                val stderr = intent.getStringExtra(RESULT_STDERR) ?: ""
-                val exitCode = intent.getIntExtra(RESULT_EXIT_CODE, -1)
-                val errCode = intent.getIntExtra(RESULT_ERR_CODE, 0)
-                val errMsg = intent.getStringExtra(RESULT_ERR_MSG) ?: ""
+                val recId = intent.getStringExtra("EXECUTION_ID")
+                if (recId != null && recId != executionId) return
 
                 val endTime = System.currentTimeMillis()
-
-                val status = when {
-                    errCode != 0 -> {
-                        if (errMsg.contains("external apps", ignoreCase = true) || errCode == 1) {
-                            TermuxExecutionStatus.SETUP_REQUIRED
-                        } else {
-                            TermuxExecutionStatus.FAILED
-                        }
-                    }
-                    exitCode == 0 -> TermuxExecutionStatus.SUCCESS
-                    else -> TermuxExecutionStatus.FAILED
-                }
-
-                val msg = when {
-                    status == TermuxExecutionStatus.SUCCESS -> stdout.ifBlank { "Command completed successfully." }
-                    status == TermuxExecutionStatus.SETUP_REQUIRED -> "Setup required: Ensure allow-external-apps=true is in ~/.termux/termux.properties"
-                    stderr.isNotBlank() -> stderr
-                    errMsg.isNotBlank() -> errMsg
-                    else -> "Command failed with exit code $exitCode"
-                }
-
-                resultChannel.trySend(
-                    TermuxExecutionResult(
-                        status = status,
-                        exitCode = exitCode,
-                        stdout = stdout,
-                        stderr = stderr,
-                        message = msg,
-                        startTimeMillis = startTime,
-                        endTimeMillis = endTime
-                    )
-                )
+                val parsedResult = parseResultBundle(intent, startTime, endTime)
+                resultChannel.trySend(parsedResult)
             }
         }
 
-        ContextCompat.registerReceiver(
-            context,
-            receiver,
-            IntentFilter(ACTION_RESULT_CALLBACK),
-            ContextCompat.RECEIVER_NOT_EXPORTED
-        )
-
         try {
-            val intent = Intent(ACTION_RUN_COMMAND).apply {
-                setClassName(TERMUX_PACKAGE, RUN_COMMAND_SERVICE)
-                putExtra(EXTRA_PATH, request.executablePath)
-                putExtra(EXTRA_ARGUMENTS, request.arguments.toTypedArray())
-                if (request.workingDirectory != null) {
-                    putExtra(EXTRA_WORKDIR, request.workingDirectory)
+            ContextCompat.registerReceiver(
+                context,
+                receiver,
+                IntentFilter(TermuxConstants.ACTION_RESULT_CALLBACK),
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+
+            val intent = Intent(TermuxConstants.ACTION_RUN_COMMAND).apply {
+                setClassName(TermuxConstants.TERMUX_PACKAGE, TermuxConstants.RUN_COMMAND_SERVICE)
+                putExtra(TermuxConstants.EXTRA_PATH, request.executablePath)
+                if (request.arguments.isNotEmpty()) {
+                    putExtra(TermuxConstants.EXTRA_ARGUMENTS, request.arguments.toTypedArray())
                 }
-                putExtra(EXTRA_BACKGROUND, request.background)
-                putExtra(EXTRA_DESCRIPTION, request.description)
-                putExtra(EXTRA_PENDING_INTENT, pendingIntent)
+                if (!request.workingDirectory.isNullOrBlank()) {
+                    putExtra(TermuxConstants.EXTRA_WORKDIR, request.workingDirectory)
+                }
+                putExtra(TermuxConstants.EXTRA_BACKGROUND, request.background)
+                if (request.description.isNotBlank()) {
+                    putExtra(TermuxConstants.EXTRA_DESCRIPTION, request.description)
+                }
+                putExtra(TermuxConstants.EXTRA_PENDING_INTENT, pendingIntent)
             }
 
             val component = context.startService(intent)
             if (component == null) {
-                context.unregisterReceiver(receiver)
                 return TermuxExecutionResult(
                     status = TermuxExecutionStatus.SETUP_REQUIRED,
-                    message = "Termux RunCommandService could not be started. Check Termux installation."
+                    message = "Termux RunCommandService could not be started. Verify Termux installation.",
+                    startTimeMillis = startTime,
+                    endTimeMillis = System.currentTimeMillis()
                 )
             }
 
             val result = withTimeoutOrNull(10000L) {
                 resultChannel.receive()
             }
-
-            context.unregisterReceiver(receiver)
 
             return result ?: TermuxExecutionResult(
                 status = TermuxExecutionStatus.TIMED_OUT,
@@ -202,17 +245,109 @@ class AndroidTermuxWorker(
             )
 
         } catch (e: SecurityException) {
-            context.unregisterReceiver(receiver)
             return TermuxExecutionResult(
                 status = TermuxExecutionStatus.PERMISSION_REQUIRED,
-                message = "SecurityException: com.termux.permission.RUN_COMMAND permission denied."
+                message = "SecurityException: com.termux.permission.RUN_COMMAND permission denied.",
+                startTimeMillis = startTime,
+                endTimeMillis = System.currentTimeMillis()
             )
         } catch (e: Exception) {
-            context.unregisterReceiver(receiver)
             return TermuxExecutionResult(
                 status = TermuxExecutionStatus.FAILED,
-                message = "Execution failed: ${e.message}"
+                message = "Execution failed: ${e.message}",
+                startTimeMillis = startTime,
+                endTimeMillis = System.currentTimeMillis()
             )
+        } finally {
+            try {
+                context.unregisterReceiver(receiver)
+            } catch (_: Exception) {
+            }
         }
     }
+
+    internal fun parseResultBundle(
+        intent: Intent,
+        startTime: Long,
+        endTime: Long
+    ): TermuxExecutionResult {
+        val resultBundle = intent.getBundleExtra(TermuxConstants.EXTRA_PLUGIN_RESULT_BUNDLE)
+            ?: intent.getBundleExtra(TermuxConstants.EXTRA_PLUGIN_RESULT_BUNDLE_ALT)
+
+        if (resultBundle == null) {
+            return TermuxExecutionResult(
+                status = TermuxExecutionStatus.FAILED,
+                message = "Missing result bundle in Termux callback Intent.",
+                startTimeMillis = startTime,
+                endTimeMillis = endTime
+            )
+        }
+
+        val stdout = resultBundle.getString(TermuxConstants.RESULT_BUNDLE_STDOUT) ?: ""
+        val stderr = resultBundle.getString(TermuxConstants.RESULT_BUNDLE_STDERR) ?: ""
+        val exitCode = if (resultBundle.containsKey(TermuxConstants.RESULT_BUNDLE_EXIT_CODE)) {
+            resultBundle.getInt(TermuxConstants.RESULT_BUNDLE_EXIT_CODE, -1)
+        } else {
+            -1
+        }
+        val errCode = if (resultBundle.containsKey(TermuxConstants.RESULT_BUNDLE_ERR_CODE)) {
+            resultBundle.getInt(TermuxConstants.RESULT_BUNDLE_ERR_CODE, 0)
+        } else {
+            0
+        }
+        val errMsg = resultBundle.getString(TermuxConstants.RESULT_BUNDLE_ERR_MSG) ?: ""
+
+        val isInternalSuccess = (errCode == 0 || errCode == Activity.RESULT_OK) &&
+                !errMsg.contains("allow-external-apps", ignoreCase = true) &&
+                !errMsg.contains("external apps", ignoreCase = true)
+
+        val isSetupRequired = errMsg.contains("allow-external-apps", ignoreCase = true) ||
+                errMsg.contains("external apps", ignoreCase = true) ||
+                (errCode == 1 && errMsg.contains("disabled", ignoreCase = true))
+
+        val status = when {
+            isSetupRequired -> TermuxExecutionStatus.SETUP_REQUIRED
+            !isInternalSuccess -> TermuxExecutionStatus.FAILED
+            exitCode == 0 -> TermuxExecutionStatus.SUCCESS
+            else -> TermuxExecutionStatus.FAILED
+        }
+
+        val message = when {
+            status == TermuxExecutionStatus.SUCCESS -> stdout.trim().ifBlank { "Termux command bridge working." }
+            status == TermuxExecutionStatus.SETUP_REQUIRED -> "Setup required: Ensure allow-external-apps=true in ~/.termux/termux.properties. Details: $errMsg"
+            stderr.isNotBlank() -> stderr.trim()
+            errMsg.isNotBlank() -> errMsg.trim()
+            else -> "Command failed with exit code $exitCode"
+        }
+
+        return TermuxExecutionResult(
+            status = status,
+            exitCode = exitCode,
+            stdout = stdout,
+            stderr = stderr,
+            message = message,
+            startTimeMillis = startTime,
+            endTimeMillis = endTime
+        )
+    }
+
+    private fun getTermuxPackageInfo(): Pair<Boolean, String?> {
+        return try {
+            val pkgInfo = context.packageManager.getPackageInfo(TermuxConstants.TERMUX_PACKAGE, 0)
+            Pair(true, pkgInfo.versionName)
+        } catch (e: Exception) {
+            Pair(false, null)
+        }
+    }
+
+    private fun isVersionSupported(versionName: String?): Boolean {
+        if (versionName.isNullOrBlank()) return true
+        val parts = versionName.split(".").mapNotNull { it.toIntOrNull() }
+        if (parts.isEmpty()) return true
+        val major = parts.getOrNull(0) ?: 0
+        val minor = parts.getOrNull(1) ?: 0
+        if (major > 0) return true
+        return minor >= 109
+    }
 }
+

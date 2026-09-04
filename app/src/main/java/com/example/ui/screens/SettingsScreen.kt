@@ -140,15 +140,27 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                 ) {
                     Text("Connection State", style = MaterialTheme.typography.bodyMedium)
                     val (stateText, stateColor) = when (termux.connectionState) {
-                        com.example.engine.termux.TermuxConnectionState.TERMUX_READY -> "READY" to MaterialTheme.colorScheme.primary
+                        com.example.engine.termux.TermuxConnectionState.READY -> "READY" to MaterialTheme.colorScheme.primary
+                        com.example.engine.termux.TermuxConnectionState.UNVERIFIED -> "UNVERIFIED" to MaterialTheme.colorScheme.tertiary
+                        com.example.engine.termux.TermuxConnectionState.SETUP_REQUIRED -> "SETUP REQUIRED" to MaterialTheme.colorScheme.tertiary
                         com.example.engine.termux.TermuxConnectionState.TERMUX_NOT_INSTALLED -> "NOT INSTALLED" to MaterialTheme.colorScheme.error
+                        com.example.engine.termux.TermuxConnectionState.TERMUX_TOO_OLD -> "TOO OLD (<0.109)" to MaterialTheme.colorScheme.error
                         com.example.engine.termux.TermuxConnectionState.TERMUX_PERMISSION_REQUIRED -> "PERMISSION REQUIRED" to MaterialTheme.colorScheme.error
-                        com.example.engine.termux.TermuxConnectionState.TERMUX_EXTERNAL_APPS_DISABLED -> "SETUP REQUIRED" to MaterialTheme.colorScheme.tertiary
+                        com.example.engine.termux.TermuxConnectionState.FAILED -> "FAILED" to MaterialTheme.colorScheme.error
                     }
                     Text(stateText, fontWeight = FontWeight.Bold, color = stateColor)
                 }
 
-                if (termux.connectionState != com.example.engine.termux.TermuxConnectionState.TERMUX_READY) {
+                if (!termux.detailMessage.isNullOrBlank()) {
+                    Text(
+                        termux.detailMessage!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+                }
+
+                if (termux.connectionState != com.example.engine.termux.TermuxConnectionState.READY) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         "Setup Instructions:",
@@ -182,10 +194,11 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                             onClick = { viewModel.refreshTermuxStatus() },
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("Refresh Status", style = MaterialTheme.typography.labelSmall)
+                            Text("Check Connection", style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
+
             }
 
             // WORKSPACE CONFIGURATION

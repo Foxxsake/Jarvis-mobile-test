@@ -2,16 +2,21 @@ package com.example.engine.termux
 
 enum class TermuxConnectionState {
     TERMUX_NOT_INSTALLED,
+    TERMUX_TOO_OLD,
     TERMUX_PERMISSION_REQUIRED,
-    TERMUX_EXTERNAL_APPS_DISABLED,
-    TERMUX_READY
+    UNVERIFIED,
+    READY,
+    SETUP_REQUIRED,
+    FAILED
 }
 
 data class TermuxConnectionStatus(
     val isInstalled: Boolean,
     val isPermissionGranted: Boolean,
     val isExternalAppsAllowed: Boolean,
-    val connectionState: TermuxConnectionState
+    val connectionState: TermuxConnectionState,
+    val termuxVersion: String? = null,
+    val detailMessage: String? = null
 )
 
 enum class TermuxRiskLevel {
@@ -25,6 +30,7 @@ enum class TermuxExecutionStatus {
     SUCCESS,
     FAILED,
     TERMUX_NOT_INSTALLED,
+    TERMUX_TOO_OLD,
     PERMISSION_REQUIRED,
     SETUP_REQUIRED,
     COMMAND_REJECTED,
@@ -51,3 +57,4 @@ data class TermuxExecutionResult(
     val startTimeMillis: Long = System.currentTimeMillis(),
     val endTimeMillis: Long = System.currentTimeMillis()
 )
+

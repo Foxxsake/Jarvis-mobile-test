@@ -331,10 +331,14 @@ class JarvisViewModel(
     }
 
     fun refreshTermuxStatus() {
-        _uiState.value = _uiState.value.copy(
-            termuxStatus = termuxWorker.checkConnectionState()
-        )
+        viewModelScope.launch {
+            val probedStatus = termuxWorker.probeConnection()
+            _uiState.value = _uiState.value.copy(
+                termuxStatus = probedStatus
+            )
+        }
     }
+
 
     fun refreshActiveWorkspace() {
         _uiState.value = _uiState.value.copy(
