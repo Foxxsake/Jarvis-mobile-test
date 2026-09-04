@@ -3,6 +3,8 @@ package com.example.engine
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import com.example.engine.contacts.ContactResolutionResult
+import com.example.util.PrivacyUtils
 
 enum class ToolExecutionStatus {
     SUCCESS,
@@ -22,9 +24,13 @@ data class ToolExecutionResult(
 class ToolExecutor(
     private val context: Context,
     private val toolRegistry: ToolRegistry,
-    private val contactResolver: ContactResolver = ContactResolver()
+    private val contactResolver: ContactResolver
 ) {
-    fun executeAction(command: ParsedCommand, isLocalProcessingEnabled: Boolean = true): ToolExecutionResult {
+    fun executeAction(
+        command: ParsedCommand,
+        resolvedResult: ContactResolutionResult? = null,
+        isLocalProcessingEnabled: Boolean = true
+    ): ToolExecutionResult {
         if (!isLocalProcessingEnabled) {
             return ToolExecutionResult(
                 ToolExecutionStatus.FAILED,
@@ -37,7 +43,7 @@ class ToolExecutor(
             CommandAction.OPEN_APP -> handleOpenApp(command)
             CommandAction.CALL,
             CommandAction.TEXT,
-            CommandAction.EMAIL -> handleCommunication(command)
+            CommandAction.EMAIL -> handleCommunication(command, resolvedResult)
             CommandAction.CHECK_GITHUB -> handleCheckGithub(command)
             CommandAction.BUILD,
             CommandAction.WORK_ON,
@@ -68,7 +74,7 @@ class ToolExecutor(
 
     private fun handleOpenApp(command: ParsedCommand): ToolExecutionResult {
         val targetName = command.targetAppOrPerson ?: return ToolExecutionResult(ToolExecutionStatus.FAILED, "No target tool or app specified.")
-        
+
         if (targetName.lowercase() == "settings") {
             return handleOpenSettings()
         }
@@ -142,36 +148,104 @@ class ToolExecutor(
         return ToolExecutionResult(ToolExecutionStatus.NOT_INSTALLED, "GitHub app is not installed or enabled.")
     }
 
-    private fun handleCommunication(command: ParsedCommand): ToolExecutionResult {
-        val target = command.targetAppOrPerson
-        val resolution = contactResolver.resolveContact(target)
+    private fun handleCommunication(
+        command: ParsedCommand,
+        providedResolution: ContactResolutionResult?
+    ): ToolExecutionResult {
+        val resolution = providedResolution ?: contactResolver.resolveCommandTarget(command)
 
         when (resolution) {
             is ContactResolutionResult.Resolved -> {
-                val intent = Intent(Intent.ACTION_SENDTO).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                if (command.action == CommandAction.EMAIL) {
-                    intent.data = Uri.parse("mailto:${resolution.destination}")
-                    intent.putExtra(Intent.EXTRA_TEXT, command.messageOrQuery ?: "")
-                } else if (command.action == CommandAction.TEXT) {
-                    intent.data = Uri.parse("smsto:${resolution.destination}")
-                    intent.putExtra("sms_body", command.messageOrQuery ?: "")
-                } else if (command.action == CommandAction.CALL) {
-                    intent.action = Intent.ACTION_DIAL
-                    intent.data = Uri.parse("tel:${resolution.destination}")
-                }
-                return try {
-                    context.startActivity(intent)
-                    ToolExecutionResult(ToolExecutionStatus.SUCCESS, "Opened communication for ${resolution.name}")
-                } catch (e: Exception) {
-                    ToolExecutionResult(ToolExecutionStatus.FAILED, "No intent handler available for ${command.action.name.lowercase()}")
+                val destValue = resolution.destination.value
+                val maskedDest = if (command.action == CommandAction.EMAIL) destValue else PrivacyUtils.maskPhoneNumber(destValue)
+
+                return when (command.action) {
+                    CommandAction.CALL -> {
+                        val intent = Intent(Intent.ACTION_DIAL).apply {
+                            data = Uri.parse("tel:$destValue")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        try {
+                            context.startActivity(intent)
+                            ToolExecutionResult(
+                                ToolExecutionStatus.SUCCESS,
+                                "Opened dialer for ${resolution.displayName} ($maskedDest)"
+                            )
+                        } catch (e: Exception) {
+                            ToolExecutionResult(ToolExecutionStatus.FAILED, "No dialer application found.")
+                        }
+                    }
+
+                    CommandAction.TEXT -> {
+                        val intent = Intent(Intent.ACTION_SENDTO).apply {
+                            data = Uri.parse("smsto:$destValue")
+                            putExtra("sms_body", resolution.message ?: command.messageOrQuery ?: "")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        try {
+                            context.startActivity(intent)
+                            ToolExecutionResult(
+                                ToolExecutionStatus.SUCCESS,
+                                "Opened SMS for ${resolution.displayName} ($maskedDest)"
+                            )
+                        } catch (e: Exception) {
+                            ToolExecutionResult(ToolExecutionStatus.FAILED, "No SMS application found.")
+                        }
+                    }
+
+                    CommandAction.EMAIL -> {
+                        val intent = Intent(Intent.ACTION_SENDTO).apply {
+                            data = Uri.parse("mailto:$destValue")
+                            putExtra(Intent.EXTRA_TEXT, resolution.message ?: command.messageOrQuery ?: "")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        try {
+                            context.startActivity(intent)
+                            ToolExecutionResult(
+                                ToolExecutionStatus.SUCCESS,
+                                "Opened email client for ${resolution.displayName}"
+                            )
+                        } catch (e: Exception) {
+                            ToolExecutionResult(ToolExecutionStatus.FAILED, "No email application found.")
+                        }
+                    }
+
+                    else -> ToolExecutionResult(ToolExecutionStatus.FAILED, "Invalid communication action")
                 }
             }
-            else -> {
+
+            ContactResolutionResult.PermissionRequired -> {
                 return ToolExecutionResult(
                     ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED,
-                    "Contact resolution required for target: '${target ?: command.rawArguments ?: "unknown"}'"
+                    "Contacts permission required to resolve contact."
+                )
+            }
+
+            ContactResolutionResult.NotFound -> {
+                return ToolExecutionResult(
+                    ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED,
+                    "Contact not found."
+                )
+            }
+
+            is ContactResolutionResult.Ambiguous -> {
+                return ToolExecutionResult(
+                    ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED,
+                    "Multiple contact candidates found. Selection required."
+                )
+            }
+
+            is ContactResolutionResult.MultipleDestinations -> {
+                return ToolExecutionResult(
+                    ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED,
+                    "Multiple destinations found. Selection required."
+                )
+            }
+
+            ContactResolutionResult.ResolutionRequired -> {
+                return ToolExecutionResult(
+                    ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED,
+                    "Contact name or details missing."
                 )
             }
         }

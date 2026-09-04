@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,6 +14,8 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
@@ -28,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.ActivityLog
 import com.example.engine.ParsedCommand
+import com.example.engine.contacts.ContactCandidate
+import com.example.engine.contacts.ContactDestination
 import com.example.ui.JarvisUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -36,13 +41,56 @@ fun HomeScreen(
     uiState: JarvisUiState,
     recentLogs: List<ActivityLog>,
     onCommandSubmit: (String) -> Unit,
+    onMicClick: () -> Unit,
     onApprove: () -> Unit,
     onReject: () -> Unit,
+    onSelectCandidate: (ContactCandidate) -> Unit,
+    onSelectDestination: (ContactDestination) -> Unit,
+    onRequestPermission: (String) -> Unit,
+    onDismissRationale: () -> Unit,
     onNavigateToTools: () -> Unit,
     onNavigateToActivity: () -> Unit,
     onNavigateToSettings: () -> Unit,
 ) {
     var inputText by remember { mutableStateOf("") }
+
+    if (uiState.lastRecognizedText.isNotBlank() && inputText != uiState.lastRecognizedText) {
+        inputText = uiState.lastRecognizedText
+    }
+
+    if (uiState.permissionRationaleNeeded != null) {
+        val isMic = uiState.permissionRationaleNeeded == "MIC"
+        AlertDialog(
+            onDismissRequest = onDismissRationale,
+            title = {
+                Text(if (isMic) "Microphone Access Required" else "Contacts Access Required")
+            },
+            text = {
+                Text(
+                    if (isMic) {
+                        "JARVIS needs Microphone access to listen to your spoken commands. Audio remains on this device."
+                    } else {
+                        "JARVIS needs Contacts access to find the person you asked to call, text or email. Contacts stay on this device."
+                    }
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    onDismissRationale()
+                    onRequestPermission(
+                        if (isMic) android.Manifest.permission.RECORD_AUDIO else android.Manifest.permission.READ_CONTACTS
+                    )
+                }) {
+                    Text("Allow")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissRationale) {
+                    Text("Not now")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -61,11 +109,17 @@ fun HomeScreen(
                         style = MaterialTheme.typography.labelSmall
                     )
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                        val statusColor = when (uiState.status) {
+                            "Ready" -> MaterialTheme.colorScheme.primary
+                            "Listening" -> MaterialTheme.colorScheme.secondary
+                            "Processing speech", "Planning" -> MaterialTheme.colorScheme.tertiary
+                            else -> MaterialTheme.colorScheme.error
+                        }
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(if (uiState.status == "Ready") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                                .background(statusColor)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(uiState.status, fontSize = 18.sp, fontWeight = FontWeight.Light, color = MaterialTheme.colorScheme.onSurface)
@@ -141,10 +195,96 @@ fun HomeScreen(
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Main Content Area
             Column(modifier = Modifier.weight(1f)) {
-                // Approval Card
-                if (uiState.pendingApproval != null) {
+                if (uiState.ambiguousCandidates != null) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(20.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Multiple matching contacts found",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            uiState.ambiguousCandidates.forEach { candidate ->
+                                Surface(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp)
+                                        .clickable { onSelectCandidate(candidate) },
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surface
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Text(
+                                            text = candidate.displayName,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (uiState.multipleDestinations != null) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(20.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Select destination for ${uiState.multipleDestinationsName ?: "contact"}",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            uiState.multipleDestinations.forEach { dest ->
+                                Surface(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp)
+                                        .clickable { onSelectDestination(dest) },
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surface
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.Phone, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Column {
+                                            Text(
+                                                text = dest.label,
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                            Text(
+                                                text = dest.value,
+                                                style = MaterialTheme.typography.bodyLarge
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (uiState.pendingApproval != null && uiState.ambiguousCandidates == null && uiState.multipleDestinations == null) {
                     ApprovalCard(
                         command = uiState.pendingApproval,
                         planText = uiState.planToApprove ?: "",
@@ -154,7 +294,6 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(24.dp))
                 }
 
-                // Recent Commands
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -175,7 +314,7 @@ fun HomeScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(recentLogs.take(5)) { log ->
-                        val isSuccess = log.status != "Rejected"
+                        val isSuccess = log.status != "Rejected" && log.status != "FAILED"
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -200,7 +339,13 @@ fun HomeScreen(
                                 )
                             }
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(text = log.command, style = MaterialTheme.typography.bodyMedium, color = if(isSuccess) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.tertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    text = log.command,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (isSuccess) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.tertiary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                                 Text(
                                     text = "${log.classification} • ${log.status}",
                                     style = MaterialTheme.typography.labelSmall,
@@ -212,50 +357,59 @@ fun HomeScreen(
                 }
             }
 
-            // Input Area
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp, top = 16.dp)
             ) {
-                // Central Mic Button
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(bottom = 24.dp)) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(bottom = 16.dp)) {
+                    val isListening = uiState.status == "Listening"
                     Box(
                         modifier = Modifier
                             .size(100.dp)
                             .blur(24.dp)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f), CircleShape)
+                            .background(
+                                if (isListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                                CircleShape
+                            )
                     )
                     Surface(
-                        modifier = Modifier.size(80.dp),
+                        modifier = Modifier
+                            .size(80.dp)
+                            .clickable { onMicClick() },
                         shape = CircleShape,
-                        color = MaterialTheme.colorScheme.background,
-                        border = androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+                        color = if (isListening) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.background,
+                        border = BorderStroke(
+                            2.dp,
+                            if (isListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                        )
                     ) {
                         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                             Box(
                                 modifier = Modifier
                                     .size(56.dp)
-                                    .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape),
+                                    .background(
+                                        if (isListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                                        CircleShape
+                                    ),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Mic,
-                                    contentDescription = "Voice setup coming next",
+                                    contentDescription = "Tap to speak",
                                     modifier = Modifier.size(24.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    tint = if (isListening) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
                     }
                 }
                 Text(
-                    text = "Voice setup coming next",
+                    text = if (uiState.status == "Listening") "Listening..." else "Tap mic for push-to-talk voice input",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
 
-                // Text Input
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -268,7 +422,7 @@ fun HomeScreen(
                         value = inputText,
                         onValueChange = { inputText = it },
                         modifier = Modifier.weight(1f),
-                        placeholder = { Text("Enter command...", color = MaterialTheme.colorScheme.tertiary) },
+                        placeholder = { Text("Enter or speak command...", color = MaterialTheme.colorScheme.tertiary) },
                         singleLine = true,
                         colors = TextFieldDefaults.colors(
                             focusedContainerColor = Color.Transparent,
@@ -305,7 +459,6 @@ fun ApprovalCard(
         shape = RoundedCornerShape(28.dp)
     ) {
         Box(modifier = Modifier.padding(20.dp)) {
-            // Pending Approval Badge
             Surface(
                 color = MaterialTheme.colorScheme.secondary,
                 shape = CircleShape,
@@ -322,9 +475,14 @@ fun ApprovalCard(
             Column(modifier = Modifier.padding(top = 8.dp)) {
                 Text(text = "Requested Action", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(text = command.rawText, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                
+
+                if (planText.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(text = planText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                }
+
                 Spacer(modifier = Modifier.height(16.dp))
-                
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -333,7 +491,7 @@ fun ApprovalCard(
                         onClick = onReject,
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(16.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha=0.1f)),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha=0.1f)),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
                     ) {
                         Text("REJECT", style = MaterialTheme.typography.labelMedium)

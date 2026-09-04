@@ -7,11 +7,18 @@ import com.example.data.ActivityRepository
 import com.example.data.SettingsManager
 import com.example.engine.CommandAction
 import com.example.engine.CommandParser
+import com.example.engine.ContactResolver
 import com.example.engine.ParsedCommand
 import com.example.engine.TaskRouter
+import com.example.engine.ToolExecutionStatus
 import com.example.engine.ToolExecutor
 import com.example.engine.ToolRegistry
-import com.example.engine.ToolExecutionStatus
+import com.example.engine.contacts.ContactCandidate
+import com.example.engine.contacts.ContactDestination
+import com.example.engine.contacts.ContactResolutionResult
+import com.example.engine.speech.SpeechManager
+import com.example.engine.speech.SpeechState
+import com.example.util.PrivacyUtils
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -22,7 +29,15 @@ import kotlinx.coroutines.launch
 data class JarvisUiState(
     val status: String = "Ready",
     val pendingApproval: ParsedCommand? = null,
-    val planToApprove: String? = null
+    val planToApprove: String? = null,
+    val resolvedContact: ContactResolutionResult.Resolved? = null,
+    val ambiguousCandidates: List<ContactCandidate>? = null,
+    val ambiguousQuery: String? = null,
+    val multipleDestinations: List<ContactDestination>? = null,
+    val multipleDestinationsName: String? = null,
+    val pendingMessageForDestination: String? = null,
+    val permissionRationaleNeeded: String? = null, // "MIC" or "CONTACTS"
+    val lastRecognizedText: String = ""
 )
 
 class JarvisViewModel(
@@ -30,6 +45,8 @@ class JarvisViewModel(
     val settingsManager: SettingsManager,
     private val toolRegistry: ToolRegistry,
     private val toolExecutor: ToolExecutor,
+    private val contactResolver: ContactResolver,
+    val speechManager: SpeechManager,
     private val commandParser: CommandParser = CommandParser(),
     private val taskRouter: TaskRouter = TaskRouter(toolRegistry)
 ) : ViewModel() {
@@ -50,13 +67,6 @@ class JarvisViewModel(
             initialValue = true
         )
 
-    val confirmationRequired: StateFlow<Boolean> = settingsManager.confirmationRequiredFlow
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = true
-        )
-
     private val _uiState = MutableStateFlow(JarvisUiState())
     val uiState: StateFlow<JarvisUiState> = _uiState.asStateFlow()
 
@@ -64,6 +74,43 @@ class JarvisViewModel(
         viewModelScope.launch {
             settingsManager.disabledToolIdsFlow.collect { disabledSet ->
                 toolRegistry.updateDisabledTools(disabledSet)
+            }
+        }
+
+        viewModelScope.launch {
+            speechManager.speechState.collect { speechState ->
+                when (speechState) {
+                    is SpeechState.Ready -> {
+                        if (_uiState.value.status == "Listening" || _uiState.value.status == "Processing speech") {
+                            _uiState.value = _uiState.value.copy(status = "Ready")
+                        }
+                    }
+                    is SpeechState.Listening -> {
+                        _uiState.value = _uiState.value.copy(status = "Listening")
+                    }
+                    is SpeechState.Processing -> {
+                        _uiState.value = _uiState.value.copy(status = "Processing speech")
+                    }
+                    is SpeechState.Success -> {
+                        _uiState.value = _uiState.value.copy(
+                            status = "Ready",
+                            lastRecognizedText = speechState.text
+                        )
+                        processCommand(speechState.text)
+                    }
+                    is SpeechState.Error -> {
+                        _uiState.value = _uiState.value.copy(status = speechState.message)
+                    }
+                    is SpeechState.PermissionRequired -> {
+                        _uiState.value = _uiState.value.copy(
+                            status = "Microphone permission required",
+                            permissionRationaleNeeded = "MIC"
+                        )
+                    }
+                    is SpeechState.Unavailable -> {
+                        _uiState.value = _uiState.value.copy(status = "Speech unavailable")
+                    }
+                }
             }
         }
     }
@@ -85,7 +132,24 @@ class JarvisViewModel(
             return
         }
 
-        _uiState.value = _uiState.value.copy(status = "Planning")
+        _uiState.value = _uiState.value.copy(
+            status = "Planning",
+            ambiguousCandidates = null,
+            ambiguousQuery = null,
+            multipleDestinations = null,
+            multipleDestinationsName = null,
+            permissionRationaleNeeded = null
+        )
+
+        if (parsed.action == CommandAction.CALL ||
+            parsed.action == CommandAction.TEXT ||
+            parsed.action == CommandAction.EMAIL
+        ) {
+            val resolution = contactResolver.resolveCommandTarget(parsed)
+            handleContactResolution(parsed, resolution)
+            return
+        }
+
         val plan = taskRouter.route(parsed)
 
         if (parsed.requiresApproval) {
@@ -99,11 +163,109 @@ class JarvisViewModel(
         }
     }
 
+    fun handleContactResolution(parsed: ParsedCommand, resolution: ContactResolutionResult) {
+        when (resolution) {
+            is ContactResolutionResult.PermissionRequired -> {
+                _uiState.value = _uiState.value.copy(
+                    status = "Contacts permission required",
+                    permissionRationaleNeeded = "CONTACTS",
+                    pendingApproval = parsed
+                )
+            }
+            is ContactResolutionResult.Ambiguous -> {
+                _uiState.value = _uiState.value.copy(
+                    status = "Select contact",
+                    pendingApproval = parsed,
+                    ambiguousQuery = resolution.query,
+                    ambiguousCandidates = resolution.candidates,
+                    pendingMessageForDestination = resolution.message
+                )
+            }
+            is ContactResolutionResult.MultipleDestinations -> {
+                _uiState.value = _uiState.value.copy(
+                    status = "Select phone number/email",
+                    pendingApproval = parsed,
+                    multipleDestinationsName = resolution.displayName,
+                    multipleDestinations = resolution.destinations,
+                    pendingMessageForDestination = resolution.message
+                )
+            }
+            is ContactResolutionResult.NotFound -> {
+                logActivity(
+                    parsed,
+                    "Contact lookup",
+                    ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED.name,
+                    "Contact not found."
+                )
+                _uiState.value = _uiState.value.copy(status = "Contact not found")
+            }
+            is ContactResolutionResult.Resolved -> {
+                val plan = taskRouter.route(parsed)
+                val maskedDest = if (parsed.action == CommandAction.EMAIL) {
+                    resolution.destination.value
+                } else {
+                    PrivacyUtils.maskPhoneNumber(resolution.destination.value)
+                }
+                val approvalDetail = "${parsed.action.name} ${resolution.displayName} ($maskedDest)\nPlan: ${plan.steps.firstOrNull() ?: ""}"
+
+                _uiState.value = _uiState.value.copy(
+                    status = "Waiting for approval",
+                    pendingApproval = parsed,
+                    planToApprove = approvalDetail,
+                    resolvedContact = resolution
+                )
+            }
+            ContactResolutionResult.ResolutionRequired -> {
+                logActivity(
+                    parsed,
+                    "Contact lookup",
+                    ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED.name,
+                    "Contact name or target missing."
+                )
+                _uiState.value = _uiState.value.copy(status = "Contact details missing")
+            }
+        }
+    }
+
+    fun selectContactCandidate(candidate: ContactCandidate) {
+        val pending = _uiState.value.pendingApproval ?: return
+        val msg = _uiState.value.pendingMessageForDestination
+        val resolution = contactResolver.resolveCandidateDestinations(candidate, msg)
+
+        _uiState.value = _uiState.value.copy(
+            ambiguousCandidates = null,
+            ambiguousQuery = null
+        )
+
+        handleContactResolution(pending, resolution)
+    }
+
+    fun selectContactDestination(destination: ContactDestination) {
+        val pending = _uiState.value.pendingApproval ?: return
+        val name = _uiState.value.multipleDestinationsName ?: "Contact"
+        val msg = _uiState.value.pendingMessageForDestination
+
+        val resolved = ContactResolutionResult.Resolved(
+            displayName = name,
+            destination = destination,
+            message = msg
+        )
+
+        _uiState.value = _uiState.value.copy(
+            multipleDestinations = null,
+            multipleDestinationsName = null
+        )
+
+        handleContactResolution(pending, resolved)
+    }
+
     fun approvePending() {
         val pending = _uiState.value.pendingApproval
         val planText = _uiState.value.planToApprove
+        val resolved = _uiState.value.resolvedContact
+
         if (pending != null) {
-            execute(pending, planText ?: "")
+            execute(pending, planText ?: "", resolved)
         }
         clearApproval()
     }
@@ -121,15 +283,29 @@ class JarvisViewModel(
         clearApproval()
     }
 
+    fun dismissPermissionRationale() {
+        _uiState.value = _uiState.value.copy(permissionRationaleNeeded = null)
+    }
+
     private fun clearApproval() {
         _uiState.value = _uiState.value.copy(
             status = "Ready",
             pendingApproval = null,
-            planToApprove = null
+            planToApprove = null,
+            resolvedContact = null,
+            ambiguousCandidates = null,
+            ambiguousQuery = null,
+            multipleDestinations = null,
+            multipleDestinationsName = null,
+            permissionRationaleNeeded = null
         )
     }
 
-    private fun execute(command: ParsedCommand, planText: String) {
+    private fun execute(
+        command: ParsedCommand,
+        planText: String,
+        resolvedContact: ContactResolutionResult.Resolved? = null
+    ) {
         if (command.action == CommandAction.UNKNOWN) {
             logActivity(
                 command,
@@ -141,7 +317,7 @@ class JarvisViewModel(
             return
         }
 
-        val result = toolExecutor.executeAction(command, localProcessingEnabled.value)
+        val result = toolExecutor.executeAction(command, resolvedContact, localProcessingEnabled.value)
         logActivity(command, planText, result.status.name, result.message)
         _uiState.value = _uiState.value.copy(status = "Ready")
     }
@@ -165,5 +341,10 @@ class JarvisViewModel(
                 )
             )
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        speechManager.destroyRecognizer()
     }
 }

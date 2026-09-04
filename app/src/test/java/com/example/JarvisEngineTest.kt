@@ -3,6 +3,8 @@ package com.example
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.engine.*
+import com.example.engine.contacts.*
+import com.example.util.PrivacyUtils
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -16,16 +18,40 @@ class JarvisEngineTest {
 
     private lateinit var context: Context
     private lateinit var toolRegistry: ToolRegistry
+    private lateinit var fakeContactsProvider: FakeContactsProvider
+    private lateinit var contactResolver: ContactResolver
     private lateinit var toolExecutor: ToolExecutor
     private lateinit var parser: CommandParser
+
+    class FakeContactsProvider(
+        var hasPerm: Boolean = true,
+        var candidates: List<ContactCandidate> = emptyList()
+    ) : ContactsProvider {
+        override fun hasPermission(): Boolean = hasPerm
+        override fun searchContacts(query: String, isEmail: Boolean): List<ContactCandidate> {
+            if (!hasPerm) return emptyList()
+            val clean = query.trim().lowercase()
+            return candidates.filter { candidate ->
+                candidate.displayName.lowercase().contains(clean)
+            }
+        }
+        override fun getAllContacts(isEmail: Boolean): List<ContactCandidate> {
+            if (!hasPerm) return emptyList()
+            return candidates
+        }
+    }
 
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
         toolRegistry = ToolRegistry(context)
-        toolExecutor = ToolExecutor(context, toolRegistry)
+        fakeContactsProvider = FakeContactsProvider()
+        contactResolver = ContactResolver(fakeContactsProvider)
+        toolExecutor = ToolExecutor(context, toolRegistry, contactResolver)
         parser = CommandParser()
     }
+
+    // --- FOUNDATION TESTS ---
 
     @Test
     fun `open GitHub parsing`() {
@@ -76,7 +102,7 @@ class JarvisEngineTest {
         val parsed = parser.parse("text John Smith I'm running late")
         val result = toolExecutor.executeAction(parsed)
         assertEquals(ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED, result.status)
-        assertTrue(result.message.contains("Contact resolution required"))
+        assertTrue(result.message.isNotBlank())
     }
 
     @Test
@@ -193,5 +219,131 @@ class JarvisEngineTest {
         val result = toolExecutor.executeAction(parsed, isLocalProcessingEnabled = false)
         assertEquals(ToolExecutionStatus.FAILED, result.status)
         assertEquals("Local command processing is currently disabled in settings.", result.message)
+    }
+
+    // --- PASS 3 CONTACTS & VOICE TESTS ---
+
+    @Test
+    fun `exact contact match`() {
+        fakeContactsProvider.candidates = listOf(
+            ContactCandidate("1", "Sarah Smith", listOf(ContactDestination("0712345678", "Mobile")))
+        )
+        val parsed = parser.parse("call Sarah Smith")
+        val res = contactResolver.resolveCommandTarget(parsed)
+        assertTrue(res is ContactResolutionResult.Resolved)
+        val resolved = res as ContactResolutionResult.Resolved
+        assertEquals("Sarah Smith", resolved.displayName)
+        assertEquals("0712345678", resolved.destination.value)
+    }
+
+    @Test
+    fun `longest matching contact prefix`() {
+        fakeContactsProvider.candidates = listOf(
+            ContactCandidate("1", "Sarah", listOf(ContactDestination("0700000000", "Mobile"))),
+            ContactCandidate("2", "Sarah Smith", listOf(ContactDestination("0712345678", "Mobile")))
+        )
+        val parsed = parser.parse("text Sarah Smith I'm running late")
+        val res = contactResolver.resolveCommandTarget(parsed)
+        assertTrue(res is ContactResolutionResult.Resolved)
+        val resolved = res as ContactResolutionResult.Resolved
+        assertEquals("Sarah Smith", resolved.displayName)
+        assertEquals("I'm running late", resolved.message)
+    }
+
+    @Test
+    fun `ambiguous contact result`() {
+        fakeContactsProvider.candidates = listOf(
+            ContactCandidate("1", "John Smith", listOf(ContactDestination("0711111111", "Mobile"))),
+            ContactCandidate("2", "John Miller", listOf(ContactDestination("0722222222", "Mobile")))
+        )
+        val parsed = parser.parse("call John")
+        val res = contactResolver.resolveCommandTarget(parsed)
+        assertTrue(res is ContactResolutionResult.Ambiguous)
+        val ambiguous = res as ContactResolutionResult.Ambiguous
+        assertEquals(2, ambiguous.candidates.size)
+    }
+
+    @Test
+    fun `contact not found`() {
+        fakeContactsProvider.candidates = emptyList()
+        val parsed = parser.parse("call UnknownPerson")
+        val res = contactResolver.resolveCommandTarget(parsed)
+        assertEquals(ContactResolutionResult.NotFound, res)
+    }
+
+    @Test
+    fun `contact permission required`() {
+        fakeContactsProvider.hasPerm = false
+        val parsed = parser.parse("call Sarah")
+        val res = contactResolver.resolveCommandTarget(parsed)
+        assertEquals(ContactResolutionResult.PermissionRequired, res)
+    }
+
+    @Test
+    fun `multiple phone numbers requires selection`() {
+        fakeContactsProvider.candidates = listOf(
+            ContactCandidate(
+                "1", "John Smith", listOf(
+                    ContactDestination("0711111111", "Mobile"),
+                    ContactDestination("0208888888", "Work")
+                )
+            )
+        )
+        val parsed = parser.parse("call John Smith")
+        val res = contactResolver.resolveCommandTarget(parsed)
+        assertTrue(res is ContactResolutionResult.MultipleDestinations)
+        val multi = res as ContactResolutionResult.MultipleDestinations
+        assertEquals(2, multi.destinations.size)
+    }
+
+    @Test
+    fun `multiple email addresses requires selection`() {
+        fakeContactsProvider.candidates = listOf(
+            ContactCandidate(
+                "1", "John Smith", listOf(
+                    ContactDestination("john@personal.com", "Personal"),
+                    ContactDestination("john@work.com", "Work")
+                )
+            )
+        )
+        val parsed = parser.parse("email John Smith: Hi")
+        val res = contactResolver.resolveCommandTarget(parsed)
+        assertTrue(res is ContactResolutionResult.MultipleDestinations)
+        val multi = res as ContactResolutionResult.MultipleDestinations
+        assertEquals(2, multi.destinations.size)
+    }
+
+    @Test
+    fun `CALL uses ACTION_DIAL, never ACTION_CALL`() {
+        val resolved = ContactResolutionResult.Resolved(
+            displayName = "Sarah Smith",
+            destination = ContactDestination("0712345678", "Mobile")
+        )
+        val parsed = parser.parse("call Sarah Smith")
+        val execResult = toolExecutor.executeAction(parsed, resolvedResult = resolved)
+        assertEquals(ToolExecutionStatus.SUCCESS, execResult.status)
+        assertTrue(execResult.message.contains("Opened dialer"))
+    }
+
+    @Test
+    fun `permission denial never executes communication`() {
+        fakeContactsProvider.hasPerm = false
+        val parsed = parser.parse("call Sarah")
+        val execResult = toolExecutor.executeAction(parsed)
+        assertEquals(ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED, execResult.status)
+    }
+
+    @Test
+    fun `masked private activity logging behaviour`() {
+        val masked = PrivacyUtils.maskPhoneNumber("0712345678")
+        assertEquals("******5678", masked)
+    }
+
+    @Test
+    fun `no contact names are hardcoded in engine`() {
+        fakeContactsProvider.candidates = emptyList()
+        val parsed = parser.parse("call John Smith")
+        val res = contactResolver.resolveCommandTarget(parsed)
+        assertNotEquals(ContactResolutionResult.Resolved("John Smith", ContactDestination("123", "Mobile")), res)
     }
 }

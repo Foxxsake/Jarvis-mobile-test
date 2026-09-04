@@ -21,8 +21,6 @@ import kotlinx.coroutines.launch
 @Composable
 fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
     val coroutineScope = rememberCoroutineScope()
-
-    val confirmationRequired by viewModel.confirmationRequired.collectAsState()
     val localProcessing by viewModel.localProcessingEnabled.collectAsState()
 
     Scaffold(
@@ -54,11 +52,9 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                 )
                 SettingsSwitchRow(
                     label = "Confirmation for consequential actions (Mandatory)",
-                    checked = confirmationRequired,
-                    enabled = true,
-                    onCheckedChange = {
-                        coroutineScope.launch { viewModel.settingsManager.setConfirmationRequired(it) }
-                    }
+                    checked = true,
+                    enabled = false,
+                    onCheckedChange = {}
                 )
             }
 
