@@ -7,6 +7,10 @@ import com.example.engine.contacts.*
 import com.example.engine.speech.SpeechManager
 import com.example.engine.speech.SpeechState
 import com.example.ui.CommandInputState
+import com.example.ui.JarvisViewModel
+import com.example.data.ActivityRepository
+import com.example.data.SettingsManager
+import com.example.data.AppDatabase
 import com.example.util.PrivacyUtils
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
@@ -725,5 +729,159 @@ class JarvisEngineTest {
         assertTrue(plan.actions[1].requiresApproval)
         
         assertTrue(plan.requiresApproval) // entire plan needs approval
+    }
+
+    // --- PASS 4 TESTS: TERMUX EXECUTION WORKER & VOICE RECOVERY ---
+
+    @Test
+    fun `voice recognition success triggers command execution`() = runTest {
+        val fakeWorker = com.example.engine.termux.FakeTermuxWorker()
+        val localExecutor = ToolExecutor(context, toolRegistry, contactResolver, fakeWorker)
+        val db = androidx.room.Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
+        val speechManager = SpeechManager(context)
+        val vm = JarvisViewModel(
+            speechManager = speechManager,
+            toolRegistry = toolRegistry,
+            repository = ActivityRepository(db.activityLogDao()),
+            toolExecutor = localExecutor,
+            contactResolver = contactResolver,
+            settingsManager = SettingsManager(context),
+            termuxWorker = fakeWorker
+        )
+
+        // Trigger speech success event
+        val speechStateField = SpeechManager::class.java.getDeclaredField("_speechState")
+        speechStateField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val stateFlow = speechStateField.get(speechManager) as kotlinx.coroutines.flow.MutableStateFlow<SpeechState>
+        
+        // Simulating speech success
+        stateFlow.value = SpeechState.Success("check termux")
+        
+        // Let coroutine collect
+        kotlinx.coroutines.delay(100)
+
+        // Verify command ran and last recognized text was updated
+        assertEquals("check termux", vm.uiState.value.lastRecognizedText)
+        assertEquals("Ready", vm.uiState.value.status)
+    }
+
+    @Test
+    fun `termux command classification risk levels`() {
+        assertEquals(
+            com.example.engine.termux.TermuxRiskLevel.READ_ONLY,
+            com.example.engine.termux.TermuxCommandClassifier.classify("git", listOf("status"))
+        )
+        assertEquals(
+            com.example.engine.termux.TermuxRiskLevel.READ_ONLY,
+            com.example.engine.termux.TermuxCommandClassifier.classify("node", listOf("--version"))
+        )
+        assertEquals(
+            com.example.engine.termux.TermuxRiskLevel.MUTATING,
+            com.example.engine.termux.TermuxCommandClassifier.classify("npm", listOf("install"))
+        )
+        assertEquals(
+            com.example.engine.termux.TermuxRiskLevel.DESTRUCTIVE,
+            com.example.engine.termux.TermuxCommandClassifier.classify("git", listOf("reset", "--hard"))
+        )
+        assertEquals(
+            com.example.engine.termux.TermuxRiskLevel.PUBLISHING,
+            com.example.engine.termux.TermuxCommandClassifier.classify("git", listOf("push"))
+        )
+    }
+
+    @Test
+    fun `read-only termux commands do not require approval`() {
+        val plan = parser.parse("check git version")
+        assertEquals(CommandAction.TERMUX_COMMAND, plan.actions.first().action)
+        assertFalse(plan.actions.first().requiresApproval)
+
+        val planStatus = parser.parse("check git status")
+        assertEquals(CommandAction.TERMUX_COMMAND, planStatus.actions.first().action)
+        assertFalse(planStatus.actions.first().requiresApproval)
+    }
+
+    @Test
+    fun `mutating termux commands require approval`() {
+        val plan = parser.parse("run tests")
+        assertEquals(CommandAction.TERMUX_COMMAND, plan.actions.first().action)
+        assertTrue(plan.actions.first().requiresApproval)
+
+        val planBuild = parser.parse("build project")
+        assertEquals(CommandAction.TERMUX_COMMAND, planBuild.actions.first().action)
+        assertTrue(planBuild.actions.first().requiresApproval)
+    }
+
+    @Test
+    fun `fake termux worker executes read-only commands successfully`() = runTest {
+        val fakeWorker = com.example.engine.termux.FakeTermuxWorker()
+        val localExecutor = ToolExecutor(context, toolRegistry, contactResolver, fakeWorker)
+
+        val plan = parser.parse("check git version")
+        val result = localExecutor.executeAction(plan.actions.first())
+
+        assertEquals(ToolExecutionStatus.SUCCESS, result.status)
+        assertTrue(result.message.contains("git version"))
+    }
+
+    @Test
+    fun `termux execution returns permission required when permission is missing`() = runTest {
+        val fakeWorker = com.example.engine.termux.FakeTermuxWorker(
+            mockConnectionStatus = com.example.engine.termux.TermuxConnectionStatus(
+                isInstalled = true,
+                isPermissionGranted = false,
+                isExternalAppsAllowed = true,
+                connectionState = com.example.engine.termux.TermuxConnectionState.TERMUX_PERMISSION_REQUIRED
+            )
+        )
+        val localExecutor = ToolExecutor(context, toolRegistry, contactResolver, fakeWorker)
+
+        val plan = parser.parse("check termux")
+        val result = localExecutor.executeAction(plan.actions.first())
+
+        assertEquals(ToolExecutionStatus.FAILED, result.status)
+        assertTrue(result.message.contains("Permission required"))
+    }
+
+    @Test
+    fun `check project status requires registered workspace`() = runTest {
+        val fakeWorker = com.example.engine.termux.FakeTermuxWorker()
+        val emptyWsRegistry = com.example.data.workspace.LocalWorkspaceRegistry()
+        val localExecutor = ToolExecutor(
+            context = context,
+            toolRegistry = toolRegistry,
+            contactResolver = contactResolver,
+            termuxWorker = fakeWorker,
+            workspaceRegistry = emptyWsRegistry
+        )
+
+        val plan = parser.parse("check project status")
+        val result = localExecutor.executeAction(plan.actions.first())
+
+        assertEquals(ToolExecutionStatus.FAILED, result.status)
+        assertTrue(result.message.contains("WORKSPACE_REQUIRED"))
+    }
+
+    @Test
+    fun `check project status returns clean working tree when workspace is set`() = runTest {
+        val fakeWorker = com.example.engine.termux.FakeTermuxWorker()
+        val wsRegistry = com.example.data.workspace.LocalWorkspaceRegistry(context)
+        wsRegistry.setActiveWorkspace(
+            com.example.data.workspace.Workspace("1", "TestProject", "/data/data/com.termux/files/home/project")
+        )
+        val localExecutor = ToolExecutor(
+            context = context,
+            toolRegistry = toolRegistry,
+            contactResolver = contactResolver,
+            termuxWorker = fakeWorker,
+            workspaceRegistry = wsRegistry
+        )
+
+        val plan = parser.parse("check project status")
+        val result = localExecutor.executeAction(plan.actions.first())
+
+        assertEquals(ToolExecutionStatus.SUCCESS, result.status)
+        assertTrue(result.message.contains("TestProject"))
+        assertTrue(result.message.lowercase().contains("working tree clean"))
     }
 }

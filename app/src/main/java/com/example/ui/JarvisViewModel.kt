@@ -41,7 +41,15 @@ data class JarvisUiState(
     val multipleDestinations: List<ContactDestination>? = null,
     val pendingMessageForDestination: String? = null,
     val permissionRationaleNeeded: String? = null,
-    val permissionPermanentlyDenied: String? = null
+    val permissionPermanentlyDenied: String? = null,
+    val termuxStatus: com.example.engine.termux.TermuxConnectionStatus = com.example.engine.termux.TermuxConnectionStatus(
+        isInstalled = false,
+        isPermissionGranted = false,
+        isExternalAppsAllowed = false,
+        connectionState = com.example.engine.termux.TermuxConnectionState.TERMUX_NOT_INSTALLED
+    ),
+    val activeWorkspace: com.example.data.workspace.Workspace? = null,
+    val lastTermuxResult: com.example.engine.termux.TermuxExecutionResult? = null
 )
 
 class JarvisViewModel(
@@ -50,7 +58,9 @@ class JarvisViewModel(
     private val repository: ActivityRepository,
     private val toolExecutor: ToolExecutor,
     private val contactResolver: ContactResolver,
-    val settingsManager: SettingsManager
+    val settingsManager: SettingsManager,
+    val termuxWorker: com.example.engine.termux.TermuxWorker = com.example.engine.termux.FakeTermuxWorker(),
+    val workspaceRegistry: com.example.data.workspace.WorkspaceRegistry = com.example.data.workspace.LocalWorkspaceRegistry()
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(JarvisUiState())
@@ -64,6 +74,8 @@ class JarvisViewModel(
     val tools: StateFlow<List<com.example.engine.Tool>> = toolRegistry.tools
 
     init {
+        refreshTermuxStatus()
+        refreshActiveWorkspace()
         viewModelScope.launch {
             speechManager.speechState.collectLatest { state ->
                 when (state) {
@@ -76,6 +88,7 @@ class JarvisViewModel(
                             speechEventId = _uiState.value.speechEventId + 1,
                             status = "Ready"
                         )
+                        submitCommand(state.text)
                     }
                     is SpeechState.Error -> { 
                         _uiState.value = _uiState.value.copy( 
@@ -315,6 +328,28 @@ class JarvisViewModel(
     
     fun refreshTools() {
         toolRegistry.refreshTools()
+    }
+
+    fun refreshTermuxStatus() {
+        _uiState.value = _uiState.value.copy(
+            termuxStatus = termuxWorker.checkConnectionState()
+        )
+    }
+
+    fun refreshActiveWorkspace() {
+        _uiState.value = _uiState.value.copy(
+            activeWorkspace = workspaceRegistry.getActiveWorkspace()
+        )
+    }
+
+    fun setWorkspacePath(displayName: String, path: String) {
+        val ws = com.example.data.workspace.Workspace(
+            id = java.util.UUID.randomUUID().toString(),
+            displayName = displayName,
+            localPath = path
+        )
+        workspaceRegistry.setActiveWorkspace(ws)
+        refreshActiveWorkspace()
     }
 
     private fun logActivity(originalText: String, action: PlannedAction, planText: String, status: String, resultMessage: String) {

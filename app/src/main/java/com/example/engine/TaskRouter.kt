@@ -61,6 +61,16 @@ class TaskRouter(private val toolRegistry: ToolRegistry) {
                 primaryToolId = "github"
             )
 
+            CommandAction.CHECK_PROJECT_STATUS -> ExecutionPlan(
+                steps = listOf("Check project status in workspace via Termux"),
+                primaryToolId = "termux"
+            )
+
+            CommandAction.TERMUX_COMMAND -> ExecutionPlan(
+                steps = listOf("Execute Termux command: ${command.rawArguments ?: "command"}" + if (command.requiresApproval) " [REQUIRES APPROVAL]" else ""),
+                primaryToolId = "termux"
+            )
+
             CommandAction.BUILD -> ExecutionPlan(
                 steps = listOf("Build project" + if (command.requiresApproval) " [REQUIRES APPROVAL]" else ""),
                 primaryToolId = "termux"

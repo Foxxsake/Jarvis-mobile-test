@@ -7,6 +7,8 @@ enum class CommandAction {
     TEXT,
     EMAIL,
     CHECK_GITHUB,
+    CHECK_PROJECT_STATUS,
+    TERMUX_COMMAND,
     BUILD,
     WORK_ON,
     PUSH,

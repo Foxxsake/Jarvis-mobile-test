@@ -103,7 +103,15 @@ class MainActivity : ComponentActivity() {
         toolRegistry = ToolRegistry(applicationContext)
         contactsProvider = AndroidContactsProvider(applicationContext)
         contactResolver = ContactResolver(contactsProvider)
-        toolExecutor = ToolExecutor(applicationContext, toolRegistry, contactResolver)
+        val termuxWorker = com.example.engine.termux.AndroidTermuxWorker(applicationContext)
+        val workspaceRegistry = com.example.data.workspace.LocalWorkspaceRegistry(applicationContext)
+        toolExecutor = ToolExecutor(
+            context = applicationContext,
+            toolRegistry = toolRegistry,
+            contactResolver = contactResolver,
+            termuxWorker = termuxWorker,
+            workspaceRegistry = workspaceRegistry
+        )
         speechManager = SpeechManager(applicationContext)
 
         setContent {
@@ -123,7 +131,9 @@ class MainActivity : ComponentActivity() {
                                     toolRegistry = toolRegistry,
                                     toolExecutor = toolExecutor,
                                     contactResolver = contactResolver,
-                                    speechManager = speechManager
+                                    speechManager = speechManager,
+                                    termuxWorker = termuxWorker,
+                                    workspaceRegistry = workspaceRegistry
                                 ) as T
                             }
                         }

@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,6 +83,145 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                     badgeText = "NOT IMPLEMENTED",
                     badgeType = SettingsBadgeType.NOT_IMPLEMENTED
                 )
+            }
+
+            // TERMUX EXECUTION WORKER
+            val uiState by viewModel.uiState.collectAsState()
+            val termux = uiState.termuxStatus
+            val context = androidx.compose.ui.platform.LocalContext.current
+
+            SettingsSection(title = "TERMUX EXECUTION WORKER") {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Installed", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (termux.isInstalled) "YES" else "NO",
+                        fontWeight = FontWeight.Bold,
+                        color = if (termux.isInstalled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                    )
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("RUN_COMMAND Permission", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (termux.isPermissionGranted) "GRANTED" else "REQUIRED",
+                        fontWeight = FontWeight.Bold,
+                        color = if (termux.isPermissionGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                    )
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("External App Execution", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (termux.isExternalAppsAllowed) "READY" else "SETUP REQUIRED",
+                        fontWeight = FontWeight.Bold,
+                        color = if (termux.isExternalAppsAllowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
+                    )
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Connection State", style = MaterialTheme.typography.bodyMedium)
+                    val (stateText, stateColor) = when (termux.connectionState) {
+                        com.example.engine.termux.TermuxConnectionState.TERMUX_READY -> "READY" to MaterialTheme.colorScheme.primary
+                        com.example.engine.termux.TermuxConnectionState.TERMUX_NOT_INSTALLED -> "NOT INSTALLED" to MaterialTheme.colorScheme.error
+                        com.example.engine.termux.TermuxConnectionState.TERMUX_PERMISSION_REQUIRED -> "PERMISSION REQUIRED" to MaterialTheme.colorScheme.error
+                        com.example.engine.termux.TermuxConnectionState.TERMUX_EXTERNAL_APPS_DISABLED -> "SETUP REQUIRED" to MaterialTheme.colorScheme.tertiary
+                    }
+                    Text(stateText, fontWeight = FontWeight.Bold, color = stateColor)
+                }
+
+                if (termux.connectionState != com.example.engine.termux.TermuxConnectionState.TERMUX_READY) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Setup Instructions:",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "1. Open Termux\n2. Ensure ~/.termux/termux.properties contains:\n   allow-external-apps=true\n3. Run: termux-reload-settings",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                val clip = android.content.ClipData.newPlainText("Termux Setup", "mkdir -p ~/.termux && echo \"allow-external-apps=true\" >> ~/.termux/termux.properties && termux-reload-settings")
+                                clipboard?.setPrimaryClip(clip)
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Copy Setup Command", style = MaterialTheme.typography.labelSmall)
+                        }
+
+                        OutlinedButton(
+                            onClick = { viewModel.refreshTermuxStatus() },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Refresh Status", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+            }
+
+            // WORKSPACE CONFIGURATION
+            val activeWs = uiState.activeWorkspace
+            var wsName by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(activeWs?.displayName ?: "JARVIS Mobile") }
+            var wsPath by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(activeWs?.localPath ?: "/data/data/com.termux/files/home") }
+
+            SettingsSection(title = "PROJECT WORKSPACE") {
+                Text(
+                    "Register local workspace directory for termux status and git commands:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = wsName,
+                    onValueChange = { wsName = it },
+                    label = { Text("Display Name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = wsPath,
+                    onValueChange = { wsPath = it },
+                    label = { Text("Local Path") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = { viewModel.setWorkspacePath(wsName, wsPath) },
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("Save Workspace")
+                }
             }
 
             // AI PREFERENCES (FUTURE)

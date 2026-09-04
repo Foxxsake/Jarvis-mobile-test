@@ -110,6 +110,62 @@ class CommandParser(
             )
         }
 
+        if (lower == "check project status" || lower == "project status") {
+            return PlannedAction(
+                action = CommandAction.CHECK_PROJECT_STATUS,
+                category = CommandCategory.DEVELOPMENT,
+                rawArguments = trimmed,
+                requiresApproval = approvalManager.requiresApproval(CommandAction.CHECK_PROJECT_STATUS, CommandCategory.DEVELOPMENT, text)
+            )
+        }
+
+        if (lower == "check termux" || lower == "check git version" || lower == "check node version" ||
+            lower == "check npm version" || lower == "check python version" || lower == "check git status") {
+            val termuxCmd = when (lower) {
+                "check termux" -> "whoami"
+                "check git version" -> "git --version"
+                "check node version" -> "node --version"
+                "check npm version" -> "npm --version"
+                "check python version" -> "python --version"
+                "check git status" -> "git status"
+                else -> "whoami"
+            }
+            return PlannedAction(
+                action = CommandAction.TERMUX_COMMAND,
+                category = CommandCategory.DEVELOPMENT,
+                rawArguments = termuxCmd,
+                requiresApproval = approvalManager.requiresApproval(CommandAction.TERMUX_COMMAND, CommandCategory.DEVELOPMENT, text)
+            )
+        }
+
+        if (lower.startsWith("termux ")) {
+            val cmd = trimmed.substring(7).trim()
+            return PlannedAction(
+                action = CommandAction.TERMUX_COMMAND,
+                category = CommandCategory.DEVELOPMENT,
+                rawArguments = cmd,
+                requiresApproval = approvalManager.requiresApproval(CommandAction.TERMUX_COMMAND, CommandCategory.DEVELOPMENT, text)
+            )
+        }
+
+        if (lower == "run tests" || lower == "run test") {
+            return PlannedAction(
+                action = CommandAction.TERMUX_COMMAND,
+                category = CommandCategory.DEVELOPMENT,
+                rawArguments = "test",
+                requiresApproval = approvalManager.requiresApproval(CommandAction.TERMUX_COMMAND, CommandCategory.DEVELOPMENT, text)
+            )
+        }
+
+        if (lower == "build project" || lower == "build app") {
+            return PlannedAction(
+                action = CommandAction.TERMUX_COMMAND,
+                category = CommandCategory.DEVELOPMENT,
+                rawArguments = "build",
+                requiresApproval = approvalManager.requiresApproval(CommandAction.TERMUX_COMMAND, CommandCategory.DEVELOPMENT, text)
+            )
+        }
+
         if (lower == "check github" || lower.startsWith("check github ")) {
             return PlannedAction(
                 action = CommandAction.CHECK_GITHUB,
