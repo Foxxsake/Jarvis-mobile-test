@@ -1,7 +1,6 @@
 package com.example.engine
 
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -11,7 +10,14 @@ class ToolRegistry(private val context: Context) {
     private val _tools = MutableStateFlow<List<Tool>>(emptyList())
     val tools: StateFlow<List<Tool>> = _tools.asStateFlow()
 
+    private var disabledIds: Set<String> = emptySet()
+
     init {
+        refreshTools()
+    }
+
+    fun updateDisabledTools(disabledToolIds: Set<String>) {
+        this.disabledIds = disabledToolIds
         refreshTools()
     }
 
@@ -24,8 +30,8 @@ class ToolRegistry(private val context: Context) {
                 capabilities = listOf("git", "issues", "code review"),
                 preferredUses = "Version control and project sharing",
                 toolType = ToolType.APP,
-                packageName = "com.github.android",
-                enabled = true
+                packageNames = listOf("com.github.android"),
+                aliases = listOf("github", "gh")
             ),
             Tool(
                 id = "termux",
@@ -34,8 +40,8 @@ class ToolRegistry(private val context: Context) {
                 capabilities = listOf("shell", "cli", "linux"),
                 preferredUses = "Local builds and automation",
                 toolType = ToolType.APP,
-                packageName = "com.termux",
-                enabled = true
+                packageNames = listOf("com.termux"),
+                aliases = listOf("termux", "terminal", "shell")
             ),
             Tool(
                 id = "acode",
@@ -44,8 +50,8 @@ class ToolRegistry(private val context: Context) {
                 capabilities = listOf("editor", "text"),
                 preferredUses = "Manual code inspection and fast edits",
                 toolType = ToolType.APP,
-                packageName = "com.foxdebug.acode",
-                enabled = true
+                packageNames = listOf("com.foxdebug.acodefree", "com.foxdebug.acode"),
+                aliases = listOf("acode")
             ),
             Tool(
                 id = "spck",
@@ -54,8 +60,8 @@ class ToolRegistry(private val context: Context) {
                 capabilities = listOf("editor", "web"),
                 preferredUses = "Web development",
                 toolType = ToolType.APP,
-                packageName = "io.spck",
-                enabled = true
+                packageNames = listOf("io.spck"),
+                aliases = listOf("spck", "spck editor")
             ),
             Tool(
                 id = "code_studio",
@@ -64,8 +70,8 @@ class ToolRegistry(private val context: Context) {
                 capabilities = listOf("editor", "ide"),
                 preferredUses = "Full IDE experience",
                 toolType = ToolType.APP,
-                packageName = "com.qamar.ide",
-                enabled = true
+                packageNames = listOf("com.alif.ide"),
+                aliases = listOf("code studio")
             ),
             Tool(
                 id = "pydroid",
@@ -74,8 +80,8 @@ class ToolRegistry(private val context: Context) {
                 capabilities = listOf("python", "repl"),
                 preferredUses = "Running python scripts",
                 toolType = ToolType.APP,
-                packageName = "ru.iiec.pydroid3",
-                enabled = true
+                packageNames = listOf("ru.iiec.pydroid3"),
+                aliases = listOf("pydroid", "pydroid 3", "python")
             ),
             Tool(
                 id = "expo_go",
@@ -84,8 +90,8 @@ class ToolRegistry(private val context: Context) {
                 capabilities = listOf("react-native", "preview"),
                 preferredUses = "Previewing mobile apps",
                 toolType = ToolType.APP,
-                packageName = "host.exp.exponent",
-                enabled = true
+                packageNames = listOf("host.exp.exponent"),
+                aliases = listOf("expo", "expo go")
             ),
             Tool(
                 id = "google_ai_studio",
@@ -95,25 +101,56 @@ class ToolRegistry(private val context: Context) {
                 preferredUses = "Generating boilerplate and AI logic",
                 toolType = ToolType.WEB,
                 url = "https://aistudio.google.com/",
-                enabled = true,
-                installedOrAvailable = true // Web tools are generally available
+                aliases = listOf("ai studio", "google ai studio"),
+                installedOrAvailable = true
             )
         )
 
-        val pm = context.packageManager
         val updatedTools = baseTools.map { tool ->
-            if (tool.toolType == ToolType.APP && tool.packageName != null) {
-                val isInstalled = try {
-                    pm.getPackageInfo(tool.packageName, 0)
-                    true
-                } catch (e: PackageManager.NameNotFoundException) {
-                    false
-                }
-                tool.copy(installedOrAvailable = isInstalled)
+            val isEnabled = !disabledIds.contains(tool.id)
+            if (tool.toolType == ToolType.APP && tool.packageNames.isNotEmpty()) {
+                val detectedPackage = findInstalledPackage(tool.packageNames)
+                tool.copy(
+                    installedOrAvailable = detectedPackage != null,
+                    installedPackageName = detectedPackage,
+                    enabled = isEnabled
+                )
             } else {
-                tool
+                tool.copy(enabled = isEnabled)
             }
         }
         _tools.value = updatedTools
+    }
+
+    private fun findInstalledPackage(packageNames: List<String>): String? {
+        val pm = try { context.packageManager } catch (e: Exception) { null } ?: return null
+        for (pkg in packageNames) {
+            try {
+                pm.getPackageInfo(pkg, 0)
+                return pkg
+            } catch (_: Exception) {
+            }
+        }
+        return null
+    }
+
+    fun findTool(query: String): Tool? {
+        val clean = query.trim().lowercase()
+        if (clean.isBlank()) return null
+
+        val currentList = _tools.value
+        // 1. Match by ID
+        currentList.find { it.id.lowercase() == clean }?.let { return it }
+
+        // 2. Match by Name
+        currentList.find { it.name.lowercase() == clean }?.let { return it }
+
+        // 3. Match by Alias
+        currentList.find { tool -> tool.aliases.any { alias -> alias.lowercase() == clean } }?.let { return it }
+
+        // 4. Match substring in Name or Alias
+        return currentList.find { tool ->
+            tool.name.lowercase().contains(clean) || tool.aliases.any { alias -> alias.lowercase().contains(clean) }
+        }
     }
 }

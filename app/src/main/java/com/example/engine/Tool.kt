@@ -11,8 +11,10 @@ data class Tool(
     val capabilities: List<String>,
     val preferredUses: String,
     val toolType: ToolType,
-    val packageName: String? = null,
+    val packageNames: List<String> = emptyList(),
+    val installedPackageName: String? = null,
     val url: String? = null,
-    var installedOrAvailable: Boolean = false,
+    val aliases: List<String> = emptyList(),
+    val installedOrAvailable: Boolean = false,
     val enabled: Boolean = true
 )

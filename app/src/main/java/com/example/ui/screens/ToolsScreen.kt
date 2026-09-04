@@ -5,9 +5,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -15,11 +12,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.engine.Tool
+import com.example.engine.ToolType
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ToolsScreen(
     tools: List<Tool>,
+    onToggleToolEnabled: (toolId: String, enabled: Boolean) -> Unit,
     onBack: () -> Unit
 ) {
     Scaffold(
@@ -44,7 +43,9 @@ fun ToolsScreen(
             items(tools) { tool ->
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (tool.enabled) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    )
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(
@@ -57,11 +58,59 @@ fun ToolsScreen(
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.weight(1f)
                             )
-                            if (tool.enabled) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = "Enabled", tint = MaterialTheme.colorScheme.primary)
+                            Switch(
+                                checked = tool.enabled,
+                                onCheckedChange = { onToggleToolEnabled(tool.id, it) }
+                            )
+                        }
+                        
+                        Spacer(modifier = Modifier.height(6.dp))
+                        
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val (statusText, containerColor, contentColor) = when {
+                                tool.toolType == ToolType.WEB -> Triple(
+                                    "WEB TOOL",
+                                    MaterialTheme.colorScheme.tertiaryContainer,
+                                    MaterialTheme.colorScheme.onTertiaryContainer
+                                )
+                                tool.installedOrAvailable -> Triple(
+                                    "INSTALLED",
+                                    MaterialTheme.colorScheme.primaryContainer,
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                else -> Triple(
+                                    "NOT INSTALLED",
+                                    MaterialTheme.colorScheme.errorContainer,
+                                    MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                            
+                            Surface(
+                                shape = MaterialTheme.shapes.extraSmall,
+                                color = containerColor
+                            ) {
+                                Text(
+                                    text = statusText,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = contentColor,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                            
+                            if (tool.aliases.isNotEmpty()) {
+                                Text(
+                                    text = "Aliases: ${tool.aliases.joinToString(", ")}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = tool.description,
                             style = MaterialTheme.typography.bodyMedium,

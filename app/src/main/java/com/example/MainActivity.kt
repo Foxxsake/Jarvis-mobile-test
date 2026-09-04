@@ -84,7 +84,11 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         composable("tools") {
-                            ToolsScreen(tools = tools, onBack = { navController.popBackStack() })
+                            ToolsScreen(
+                                tools = tools,
+                                onToggleToolEnabled = { id, enabled -> viewModel.toggleToolEnabled(id, enabled) },
+                                onBack = { navController.popBackStack() }
+                            )
                         }
                         composable("activity") {
                             ActivityScreen(logs = recentLogs, onBack = { navController.popBackStack() })

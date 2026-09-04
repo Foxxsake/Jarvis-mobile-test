@@ -7,44 +7,66 @@ data class ExecutionPlan(
 
 class TaskRouter(private val toolRegistry: ToolRegistry) {
     fun route(command: ParsedCommand): ExecutionPlan {
-        if (command.category == CommandCategory.DEVICE_ACTION) {
-            val toolName = command.targetAppOrPerson?.lowercase() ?: ""
-            val tool = toolRegistry.tools.value.find { it.name.lowercase() == toolName }
-            if (tool != null) {
-                return ExecutionPlan(
-                    steps = listOf("Launch ${tool.name}"),
-                    primaryToolId = tool.id
-                )
+        return when (command.action) {
+            CommandAction.OPEN_APP -> {
+                val target = command.targetAppOrPerson ?: ""
+                val tool = toolRegistry.findTool(target)
+                if (tool != null) {
+                    if (!tool.enabled) {
+                        ExecutionPlan(
+                            steps = listOf("Tool ${tool.name} is disabled in settings"),
+                            primaryToolId = tool.id
+                        )
+                    } else {
+                        ExecutionPlan(
+                            steps = listOf("Launch ${tool.name}"),
+                            primaryToolId = tool.id
+                        )
+                    }
+                } else {
+                    ExecutionPlan(
+                        steps = listOf("Attempting to launch $target"),
+                        primaryToolId = null
+                    )
+                }
             }
-            return ExecutionPlan(
-                steps = listOf("Attempting to launch ${command.targetAppOrPerson}"),
+
+            CommandAction.OPEN_SETTINGS -> ExecutionPlan(
+                steps = listOf("Open Android System Settings"),
                 primaryToolId = null
             )
-        }
 
-        if (command.category == CommandCategory.DEVELOPMENT) {
-            return ExecutionPlan(
+            CommandAction.CALL,
+            CommandAction.TEXT,
+            CommandAction.EMAIL -> ExecutionPlan(
+                steps = listOf("Resolve contact and prepare communication intent"),
+                primaryToolId = null
+            )
+
+            CommandAction.CHECK_GITHUB -> ExecutionPlan(
+                steps = listOf("Check GitHub status / launch GitHub app"),
+                primaryToolId = "github"
+            )
+
+            CommandAction.BUILD,
+            CommandAction.WORK_ON,
+            CommandAction.PUSH,
+            CommandAction.DELETE,
+            CommandAction.OVERWRITE,
+            CommandAction.RUN_COMMAND -> ExecutionPlan(
                 steps = listOf(
-                    "Use development workflow",
+                    "Development action: ${command.action.name}",
                     "Work from GitHub repository",
                     "Use Termux for local build/testing",
-                    "Open Acode when manual code inspection is useful",
-                    "Request approval before pushing changes"
+                    "Open Acode for manual code inspection"
                 ),
                 primaryToolId = "termux"
             )
-        }
-        
-        if (command.category == CommandCategory.COMMUNICATION) {
-            return ExecutionPlan(
-                steps = listOf("Open Android Intent for communication"),
+
+            CommandAction.UNKNOWN -> ExecutionPlan(
+                steps = listOf("AI planning will be required later. Command not understood natively."),
                 primaryToolId = null
             )
         }
-
-        return ExecutionPlan(
-            steps = listOf("AI planning will be required later. Command not understood natively."),
-            primaryToolId = null
-        )
     }
 }

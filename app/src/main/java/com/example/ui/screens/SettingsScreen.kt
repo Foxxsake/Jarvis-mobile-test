@@ -21,10 +21,9 @@ import kotlinx.coroutines.launch
 @Composable
 fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
     val coroutineScope = rememberCoroutineScope()
-    
-    // Default to true while loading to be safe
-    val confirmationRequired by viewModel.settingsManager.confirmationRequiredFlow.collectAsState(initial = true)
-    val localProcessing by viewModel.settingsManager.localProcessingFlow.collectAsState(initial = true)
+
+    val confirmationRequired by viewModel.confirmationRequired.collectAsState()
+    val localProcessing by viewModel.localProcessingEnabled.collectAsState()
 
     Scaffold(
         topBar = {
@@ -47,9 +46,14 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             SettingsSection(title = "CORE SAFETY") {
-                SettingsSwitchRow(label = "Never spend money automatically", checked = true, enabled = false, onCheckedChange = {})
                 SettingsSwitchRow(
-                    label = "Confirmation before consequential actions",
+                    label = "Never spend money automatically",
+                    checked = true,
+                    enabled = false,
+                    onCheckedChange = {}
+                )
+                SettingsSwitchRow(
+                    label = "Confirmation for consequential actions (Mandatory)",
                     checked = confirmationRequired,
                     enabled = true,
                     onCheckedChange = {
@@ -57,9 +61,9 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                     }
                 )
             }
-            
+
             SettingsSection(title = "AI PREFERENCES") {
-                SettingsRow(label = "AI Mode", value = "Free-first")
+                SettingsRow(label = "AI Mode", value = "FREE_FIRST")
                 SettingsRow(label = "AI Providers", value = "Placeholder - Not implemented")
                 SettingsRow(label = "Fallback order", value = "Placeholder - Not implemented")
             }

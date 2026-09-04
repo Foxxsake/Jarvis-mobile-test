@@ -1,12 +1,11 @@
 package com.example.ui
 
-import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.ActivityLog
 import com.example.data.ActivityRepository
 import com.example.data.SettingsManager
-import com.example.engine.CommandCategory
+import com.example.engine.CommandAction
 import com.example.engine.CommandParser
 import com.example.engine.ParsedCommand
 import com.example.engine.TaskRouter
@@ -44,17 +43,51 @@ class JarvisViewModel(
 
     val tools = toolRegistry.tools
 
+    val localProcessingEnabled: StateFlow<Boolean> = settingsManager.localProcessingFlow
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = true
+        )
+
+    val confirmationRequired: StateFlow<Boolean> = settingsManager.confirmationRequiredFlow
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = true
+        )
+
     private val _uiState = MutableStateFlow(JarvisUiState())
     val uiState: StateFlow<JarvisUiState> = _uiState.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            settingsManager.disabledToolIdsFlow.collect { disabledSet ->
+                toolRegistry.updateDisabledTools(disabledSet)
+            }
+        }
+    }
+
     fun processCommand(text: String) {
         if (text.isBlank()) return
-        
-        _uiState.value = _uiState.value.copy(status = "Planning")
 
+        val isLocalEnabled = localProcessingEnabled.value
         val parsed = commandParser.parse(text)
+
+        if (!isLocalEnabled) {
+            _uiState.value = _uiState.value.copy(status = "Local processing disabled")
+            logActivity(
+                parsed,
+                "Local processing disabled",
+                ToolExecutionStatus.FAILED.name,
+                "Local command processing is currently disabled in settings."
+            )
+            return
+        }
+
+        _uiState.value = _uiState.value.copy(status = "Planning")
         val plan = taskRouter.route(parsed)
-        
+
         if (parsed.requiresApproval) {
             _uiState.value = _uiState.value.copy(
                 status = "Waiting for approval",
@@ -78,7 +111,12 @@ class JarvisViewModel(
     fun rejectPending() {
         val pending = _uiState.value.pendingApproval
         if (pending != null) {
-            logActivity(pending, "Rejected", "User rejected action")
+            logActivity(
+                pending,
+                "User rejected action",
+                "REJECTED",
+                "User rejected proposed command action."
+            )
         }
         clearApproval()
     }
@@ -92,34 +130,37 @@ class JarvisViewModel(
     }
 
     private fun execute(command: ParsedCommand, planText: String) {
-        if (command.category == CommandCategory.UNKNOWN) {
-            logActivity(command, planText, "Skipped (Requires AI)")
+        if (command.action == CommandAction.UNKNOWN) {
+            logActivity(
+                command,
+                planText,
+                ToolExecutionStatus.NOT_IMPLEMENTED.name,
+                "Command not recognized locally. Requires AI engine."
+            )
             _uiState.value = _uiState.value.copy(status = "Ready")
             return
         }
 
-        val result = toolExecutor.executeAction(command)
-        val logStatus = when(result.status) {
-            ToolExecutionStatus.SUCCESS -> "Success"
-            ToolExecutionStatus.NOT_INSTALLED -> "Not Installed"
-            ToolExecutionStatus.UNSUPPORTED -> "Unsupported"
-            ToolExecutionStatus.FAILED -> "Failed"
-            ToolExecutionStatus.REQUIRES_CONNECTION -> "Requires Connection"
-        }
-
-        logActivity(command, planText, logStatus)
+        val result = toolExecutor.executeAction(command, localProcessingEnabled.value)
+        logActivity(command, planText, result.status.name, result.message)
         _uiState.value = _uiState.value.copy(status = "Ready")
     }
 
-    private fun logActivity(command: ParsedCommand, planText: String, result: String) {
+    fun toggleToolEnabled(toolId: String, enabled: Boolean) {
+        viewModelScope.launch {
+            settingsManager.setToolEnabled(toolId, enabled)
+        }
+    }
+
+    private fun logActivity(command: ParsedCommand, planText: String, status: String, resultMessage: String) {
         viewModelScope.launch {
             repository.insertLog(
                 ActivityLog(
                     command = command.rawText,
                     classification = command.category.name,
                     proposedTool = planText.take(50),
-                    status = result,
-                    result = result,
+                    status = status,
+                    result = resultMessage,
                     approvalRequired = command.requiresApproval
                 )
             )
