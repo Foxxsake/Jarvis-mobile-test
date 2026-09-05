@@ -125,10 +125,17 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("External App Execution", style = MaterialTheme.typography.bodyMedium)
+                    val (extText, extColor) = when (termux.connectionState) {
+                        com.example.engine.termux.TermuxConnectionState.READY -> "READY" to MaterialTheme.colorScheme.primary
+                        com.example.engine.termux.TermuxConnectionState.SETUP_REQUIRED -> "SETUP REQUIRED" to MaterialTheme.colorScheme.tertiary
+                        com.example.engine.termux.TermuxConnectionState.FAILED -> "FAILED / CALLBACK ERROR" to MaterialTheme.colorScheme.error
+                        com.example.engine.termux.TermuxConnectionState.UNVERIFIED -> "UNVERIFIED" to MaterialTheme.colorScheme.tertiary
+                        else -> "NOT READY" to MaterialTheme.colorScheme.error
+                    }
                     Text(
-                        if (termux.isExternalAppsAllowed) "READY" else "SETUP REQUIRED",
+                        extText,
                         fontWeight = FontWeight.Bold,
-                        color = if (termux.isExternalAppsAllowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
+                        color = extColor
                     )
                 }
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)

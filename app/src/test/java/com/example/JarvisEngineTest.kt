@@ -885,42 +885,169 @@ class JarvisEngineTest {
         assertTrue(result.message.lowercase().contains("working tree clean"))
     }
 
-    // --- PASS 4.1 TESTS: TERMUX BUNDLE PARSING & PROBE TESTS ---
+    // --- PASS 4.2: INDEPENDENT TERMUX CONTRACT TESTS ---
 
     @Test
-    fun `parseResultBundle extracts stdout and exitCode from EXTRA_PLUGIN_RESULT_BUNDLE`() {
+    fun `literal result Bundle is found and parsed successfully`() {
         val worker = com.example.engine.termux.AndroidTermuxWorker(context)
         val bundle = android.os.Bundle().apply {
-            putString(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_STDOUT, "u0_a245\n")
-            putString(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_STDERR, "")
-            putInt(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_EXIT_CODE, 0)
-            putInt(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_ERR_CODE, 0)
-            putString(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_ERR_MSG, "")
+            putString("stdout", "u0_a123")
+            putString("stderr", "")
+            putInt("exitCode", 0)
+            putInt("err", -1) // Activity.RESULT_OK is -1
+            putString("errmsg", "")
         }
         val intent = android.content.Intent().apply {
-            putExtra(com.example.engine.termux.TermuxConstants.EXTRA_PLUGIN_RESULT_BUNDLE, bundle)
+            putExtra("result", bundle)
         }
 
         val parsed = worker.parseResultBundle(intent, 1000L, 1050L)
 
         assertEquals(com.example.engine.termux.TermuxExecutionStatus.SUCCESS, parsed.status)
         assertEquals(0, parsed.exitCode)
-        assertEquals("u0_a245\n", parsed.stdout)
-        assertEquals("u0_a245", parsed.message)
+        assertEquals("u0_a123", parsed.stdout)
+        assertEquals("u0_a123", parsed.message)
     }
 
     @Test
-    fun `parseResultBundle detects allow-external-apps disabled as SETUP_REQUIRED`() {
+    fun `literal result_bundle alone is NOT considered the official current contract`() {
         val worker = com.example.engine.termux.AndroidTermuxWorker(context)
         val bundle = android.os.Bundle().apply {
-            putString(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_STDOUT, "")
-            putString(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_STDERR, "")
-            putInt(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_EXIT_CODE, -1)
-            putInt(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_ERR_CODE, 1)
-            putString(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_ERR_MSG, "Execution of external apps is disabled")
+            putString("stdout", "u0_a123")
+            putInt("exitCode", 0)
+        }
+        // Intent only has the old "result_bundle" extra
+        val intent = android.content.Intent().apply {
+            putExtra("result_bundle", bundle)
+        }
+
+        val parsed = worker.parseResultBundle(intent, 1000L, 1050L)
+
+        // It must fail because the official key is "result"
+        assertEquals(com.example.engine.termux.TermuxExecutionStatus.FAILED, parsed.status)
+        assertEquals("Missing result bundle in Termux callback Intent.", parsed.message)
+    }
+
+    @Test
+    fun `literal err is read correctly and maps to SUCCESS with RESULT_OK and exitCode 0`() {
+        val worker = com.example.engine.termux.AndroidTermuxWorker(context)
+        val bundle = android.os.Bundle().apply {
+            putString("stdout", "hello")
+            putInt("exitCode", 0)
+            putInt("err", -1) // Activity.RESULT_OK
         }
         val intent = android.content.Intent().apply {
-            putExtra(com.example.engine.termux.TermuxConstants.EXTRA_PLUGIN_RESULT_BUNDLE, bundle)
+            putExtra("result", bundle)
+        }
+
+        val parsed = worker.parseResultBundle(intent, 1000L, 1050L)
+
+        assertEquals(com.example.engine.termux.TermuxExecutionStatus.SUCCESS, parsed.status)
+    }
+
+    @Test
+    fun `Activity RESULT_OK with non-zero exitCode maps to FAILED`() {
+        val worker = com.example.engine.termux.AndroidTermuxWorker(context)
+        val bundle = android.os.Bundle().apply {
+            putString("stdout", "")
+            putString("stderr", "command not found")
+            putInt("exitCode", 127)
+            putInt("err", -1) // Activity.RESULT_OK
+        }
+        val intent = android.content.Intent().apply {
+            putExtra("result", bundle)
+        }
+
+        val parsed = worker.parseResultBundle(intent, 1000L, 1050L)
+
+        assertEquals(com.example.engine.termux.TermuxExecutionStatus.FAILED, parsed.status)
+        assertEquals(127, parsed.exitCode)
+        assertEquals("command not found", parsed.message)
+    }
+
+    @Test
+    fun `internal err other than Activity RESULT_OK maps to FAILED`() {
+        val worker = com.example.engine.termux.AndroidTermuxWorker(context)
+        val bundle = android.os.Bundle().apply {
+            putInt("exitCode", -1)
+            putInt("err", 2) // Some internal Termux execution error code
+            putString("errmsg", "Failed to start session")
+        }
+        val intent = android.content.Intent().apply {
+            putExtra("result", bundle)
+        }
+
+        val parsed = worker.parseResultBundle(intent, 1000L, 1050L)
+
+        assertEquals(com.example.engine.termux.TermuxExecutionStatus.FAILED, parsed.status)
+        assertEquals("Failed to start session", parsed.message)
+    }
+
+    @Test
+    fun `stdout is returned correctly`() {
+        val worker = com.example.engine.termux.AndroidTermuxWorker(context)
+        val bundle = android.os.Bundle().apply {
+            putString("stdout", "some test stdout")
+            putInt("exitCode", 0)
+            putInt("err", -1)
+        }
+        val intent = android.content.Intent().apply {
+            putExtra("result", bundle)
+        }
+
+        val parsed = worker.parseResultBundle(intent, 1000L, 1050L)
+
+        assertEquals("some test stdout", parsed.stdout)
+    }
+
+    @Test
+    fun `stderr is returned correctly`() {
+        val worker = com.example.engine.termux.AndroidTermuxWorker(context)
+        val bundle = android.os.Bundle().apply {
+            putString("stderr", "some test stderr")
+            putInt("exitCode", 1)
+            putInt("err", -1)
+        }
+        val intent = android.content.Intent().apply {
+            putExtra("result", bundle)
+        }
+
+        val parsed = worker.parseResultBundle(intent, 1000L, 1050L)
+
+        assertEquals("some test stderr", parsed.stderr)
+        assertEquals("some test stderr", parsed.message)
+    }
+
+    @Test
+    fun `missing result Bundle maps to FAILED`() {
+        val worker = com.example.engine.termux.AndroidTermuxWorker(context)
+        val intent = android.content.Intent() // Completely empty intent
+
+        val parsed = worker.parseResultBundle(intent, 1000L, 1050L)
+
+        assertEquals(com.example.engine.termux.TermuxExecutionStatus.FAILED, parsed.status)
+        assertEquals("Missing result bundle in Termux callback Intent.", parsed.message)
+    }
+
+    @Test
+    fun `missing result bundle does NOT become SETUP_REQUIRED`() {
+        val worker = com.example.engine.termux.AndroidTermuxWorker(context)
+        val intent = android.content.Intent()
+
+        val parsed = worker.parseResultBundle(intent, 1000L, 1050L)
+
+        assertNotEquals(com.example.engine.termux.TermuxExecutionStatus.SETUP_REQUIRED, parsed.status)
+    }
+
+    @Test
+    fun `real allow-external-apps error maps to SETUP_REQUIRED`() {
+        val worker = com.example.engine.termux.AndroidTermuxWorker(context)
+        val bundle = android.os.Bundle().apply {
+            putInt("err", 1)
+            putString("errmsg", "allow-external-apps is disabled")
+        }
+        val intent = android.content.Intent().apply {
+            putExtra("result", bundle)
         }
 
         val parsed = worker.parseResultBundle(intent, 1000L, 1050L)
@@ -930,21 +1057,29 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `parseResultBundle supports EXTRA_PLUGIN_RESULT_BUNDLE_ALT fallback`() {
-        val worker = com.example.engine.termux.AndroidTermuxWorker(context)
-        val bundle = android.os.Bundle().apply {
-            putString(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_STDOUT, "git version 2.43.0")
-            putInt(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_EXIT_CODE, 0)
-            putInt(com.example.engine.termux.TermuxConstants.RESULT_BUNDLE_ERR_CODE, 0)
-        }
-        val intent = android.content.Intent().apply {
-            putExtra(com.example.engine.termux.TermuxConstants.EXTRA_PLUGIN_RESULT_BUNDLE_ALT, bundle)
-        }
+    fun `exact outbound RUN_COMMAND path key matches Termux spec`() {
+        assertEquals("com.termux.RUN_COMMAND_PATH", com.example.engine.termux.TermuxConstants.EXTRA_COMMAND_PATH)
+    }
 
-        val parsed = worker.parseResultBundle(intent, 1000L, 1050L)
+    @Test
+    fun `exact outbound arguments key matches Termux spec`() {
+        assertEquals("com.termux.RUN_COMMAND_ARGUMENTS", com.example.engine.termux.TermuxConstants.EXTRA_ARGUMENTS)
+    }
 
-        assertEquals(com.example.engine.termux.TermuxExecutionStatus.SUCCESS, parsed.status)
-        assertEquals("git version 2.43.0", parsed.stdout)
+    @Test
+    fun `exact outbound workdir key matches Termux spec`() {
+        assertEquals("com.termux.RUN_COMMAND_WORKDIR", com.example.engine.termux.TermuxConstants.EXTRA_WORKDIR)
+    }
+
+    @Test
+    fun `exact outbound pending-intent key matches Termux spec`() {
+        assertEquals("com.termux.RUN_COMMAND_PENDING_INTENT", com.example.engine.termux.TermuxConstants.EXTRA_PENDING_INTENT)
+    }
+
+    @Test
+    fun `exact official description and label keys match Termux spec`() {
+        assertEquals("com.termux.RUN_COMMAND_COMMAND_LABEL", com.example.engine.termux.TermuxConstants.EXTRA_COMMAND_LABEL)
+        assertEquals("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", com.example.engine.termux.TermuxConstants.EXTRA_COMMAND_DESCRIPTION)
     }
 
     @Test

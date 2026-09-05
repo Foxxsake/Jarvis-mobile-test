@@ -209,7 +209,7 @@ class AndroidTermuxWorker(
 
             val intent = Intent(TermuxConstants.ACTION_RUN_COMMAND).apply {
                 setClassName(TermuxConstants.TERMUX_PACKAGE, TermuxConstants.RUN_COMMAND_SERVICE)
-                putExtra(TermuxConstants.EXTRA_PATH, request.executablePath)
+                putExtra(TermuxConstants.EXTRA_COMMAND_PATH, request.executablePath)
                 if (request.arguments.isNotEmpty()) {
                     putExtra(TermuxConstants.EXTRA_ARGUMENTS, request.arguments.toTypedArray())
                 }
@@ -218,7 +218,7 @@ class AndroidTermuxWorker(
                 }
                 putExtra(TermuxConstants.EXTRA_BACKGROUND, request.background)
                 if (request.description.isNotBlank()) {
-                    putExtra(TermuxConstants.EXTRA_DESCRIPTION, request.description)
+                    putExtra(TermuxConstants.EXTRA_COMMAND_DESCRIPTION, request.description)
                 }
                 putExtra(TermuxConstants.EXTRA_PENDING_INTENT, pendingIntent)
             }
@@ -272,7 +272,6 @@ class AndroidTermuxWorker(
         endTime: Long
     ): TermuxExecutionResult {
         val resultBundle = intent.getBundleExtra(TermuxConstants.EXTRA_PLUGIN_RESULT_BUNDLE)
-            ?: intent.getBundleExtra(TermuxConstants.EXTRA_PLUGIN_RESULT_BUNDLE_ALT)
 
         if (resultBundle == null) {
             return TermuxExecutionResult(
@@ -290,20 +289,22 @@ class AndroidTermuxWorker(
         } else {
             -1
         }
-        val errCode = if (resultBundle.containsKey(TermuxConstants.RESULT_BUNDLE_ERR_CODE)) {
-            resultBundle.getInt(TermuxConstants.RESULT_BUNDLE_ERR_CODE, 0)
-        } else {
-            0
-        }
+
+        val hasErr = resultBundle.containsKey(TermuxConstants.RESULT_BUNDLE_ERR)
+        val errValue = if (hasErr) resultBundle.getInt(TermuxConstants.RESULT_BUNDLE_ERR) else null
         val errMsg = resultBundle.getString(TermuxConstants.RESULT_BUNDLE_ERR_MSG) ?: ""
 
-        val isInternalSuccess = (errCode == 0 || errCode == Activity.RESULT_OK) &&
-                !errMsg.contains("allow-external-apps", ignoreCase = true) &&
-                !errMsg.contains("external apps", ignoreCase = true)
+        val isInternalSuccess = when {
+            hasErr -> errValue == Activity.RESULT_OK
+            else -> {
+                // Backward compatibility: if err is absent, verify exitCode exists and errMsg is empty
+                resultBundle.containsKey(TermuxConstants.RESULT_BUNDLE_EXIT_CODE) && errMsg.isBlank()
+            }
+        }
 
         val isSetupRequired = errMsg.contains("allow-external-apps", ignoreCase = true) ||
                 errMsg.contains("external apps", ignoreCase = true) ||
-                (errCode == 1 && errMsg.contains("disabled", ignoreCase = true))
+                (errValue == 1 && errMsg.contains("disabled", ignoreCase = true))
 
         val status = when {
             isSetupRequired -> TermuxExecutionStatus.SETUP_REQUIRED
