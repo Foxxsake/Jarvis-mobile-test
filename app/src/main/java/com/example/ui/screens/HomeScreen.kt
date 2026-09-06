@@ -325,6 +325,7 @@ fun HomeScreen(
                 if (uiState.pendingApproval != null && uiState.ambiguousCandidates == null && uiState.multipleDestinations == null) {
                     ApprovalCard(
                         command = uiState.pendingApproval,
+                        pendingActionIndex = uiState.pendingActionIndex,
                         planText = uiState.planToApprove ?: "",
                         onApprove = onApprove,
                         onReject = onReject
@@ -498,10 +499,14 @@ fun HomeScreen(
 @Composable
 fun ApprovalCard(
     command: CommandPlan,
+    pendingActionIndex: Int = 0,
     planText: String,
     onApprove: () -> Unit,
     onReject: () -> Unit
 ) {
+    val currentAction = command.actions.getOrNull(pendingActionIndex) ?: command.actions.firstOrNull()
+    val proposal = currentAction?.proposal
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -509,23 +514,69 @@ fun ApprovalCard(
     ) {
         Box(modifier = Modifier.padding(20.dp)) {
             Surface(
-                color = MaterialTheme.colorScheme.secondary,
+                color = when (proposal?.riskLevel) {
+                    com.example.engine.termux.TermuxRiskLevel.DESTRUCTIVE -> MaterialTheme.colorScheme.error
+                    com.example.engine.termux.TermuxRiskLevel.PUBLISHING -> MaterialTheme.colorScheme.tertiary
+                    else -> MaterialTheme.colorScheme.secondary
+                },
                 shape = CircleShape,
                 modifier = Modifier.align(Alignment.TopEnd)
             ) {
+                val badgeText = if (command.actions.size > 1) {
+                    "ACTION ${pendingActionIndex + 1} OF ${command.actions.size}"
+                } else if (proposal != null) {
+                    proposal.riskLevel.name
+                } else {
+                    "APPROVAL REQUIRED"
+                }
                 Text(
-                    text = "PENDING APPROVAL",
+                    text = badgeText,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSecondary,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                 )
             }
 
             Column(modifier = Modifier.padding(top = 8.dp)) {
-                Text(text = "Requested Action", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(text = command.originalText, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    text = if (command.actions.size > 1) "Requested Plan: ${command.originalText}" else "Requested Action",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = currentAction?.action?.name ?: command.originalText,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
 
-                if (planText.isNotBlank()) {
+                if (proposal != null) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                text = "PROPOSED COMMAND",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = proposal.command,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Tool: ${proposal.tool} • Risk: ${proposal.riskLevel.name}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else if (planText.isNotBlank()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(text = planText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
                 }
@@ -540,7 +591,7 @@ fun ApprovalCard(
                         onClick = onReject,
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(16.dp),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha=0.1f)),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
                     ) {
                         Text("REJECT", style = MaterialTheme.typography.labelMedium)
@@ -549,7 +600,10 @@ fun ApprovalCard(
                         onClick = onApprove,
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary, contentColor = MaterialTheme.colorScheme.onSecondary)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.secondary,
+                            contentColor = MaterialTheme.colorScheme.onSecondary
+                        )
                     ) {
                         Text("APPROVE", style = MaterialTheme.typography.labelMedium)
                     }

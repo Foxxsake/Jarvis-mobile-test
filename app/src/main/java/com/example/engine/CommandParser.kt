@@ -1,12 +1,16 @@
 package com.example.engine
 
+import com.example.engine.termux.TermuxCommandClassifier
+import com.example.engine.termux.TermuxRiskLevel
+
 class CommandParser(
     private val approvalManager: ApprovalManager = ApprovalManager(),
     private val toolMatcher: ToolCommandMatcher = ToolCommandMatcher()
 ) {
 
     fun parse(text: String): CommandPlan {
-        if (text.isBlank()) {
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) {
             return CommandPlan(
                 originalText = text,
                 actions = listOf(
@@ -19,47 +23,51 @@ class CommandParser(
             )
         }
 
-        val actions = mutableListOf<PlannedAction>()
-        var remainingText: String? = text.trim()
+        val actions = trySplitActions(trimmed)
+        return CommandPlan(originalText = text, actions = actions)
+    }
 
-        while (!remainingText.isNullOrBlank()) {
-            val parsedSingle = parseSingle(remainingText)
+    private fun trySplitActions(text: String): List<PlannedAction> {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return emptyList()
 
-            if (parsedSingle.action == CommandAction.UNKNOWN) {
-                if (actions.isNotEmpty()) {
-                    val last = actions.removeAt(actions.lastIndex)
-                    actions.add(last.copy(
-                        followUp = (last.followUp?.let { "$it and " } ?: "") + remainingText,
-                        rawArguments = (last.rawArguments?.let { "$it and " } ?: "") + remainingText,
-                    ))
-                } else {
-                    actions.add(parsedSingle)
-                }
-                break
-            } else {
-                if (!parsedSingle.followUp.isNullOrBlank()) {
-                    val nextText = parsedSingle.followUp
-                    val actionWithoutFollowUp = parsedSingle.copy(followUp = null, rawArguments = null)
+        // Natural connectors and punctuation-based separators
+        val connectorPatterns = listOf(
+            Regex(";\\s*"),
+            Regex("\\s+and\\s+then\\s+", RegexOption.IGNORE_CASE),
+            Regex("\\s*,\\s*then\\s+", RegexOption.IGNORE_CASE),
+            Regex("\\s+then\\s+", RegexOption.IGNORE_CASE),
+            Regex("\\s*,\\s*and\\s+", RegexOption.IGNORE_CASE),
+            Regex("\\s+and\\s+", RegexOption.IGNORE_CASE),
+            Regex("\\s*,\\s*")
+        )
 
-                    val nextParsed = parseSingle(nextText)
-                    if (nextParsed.action != CommandAction.UNKNOWN) {
-                        actions.add(actionWithoutFollowUp)
-                        remainingText = nextText
-                    } else {
-                        actions.add(parsedSingle)
-                        break
+        for (pattern in connectorPatterns) {
+            val match = pattern.find(trimmed)
+            if (match != null) {
+                val left = trimmed.substring(0, match.range.first).trim()
+                val right = trimmed.substring(match.range.last + 1).trim()
+
+                if (left.isNotBlank() && right.isNotBlank()) {
+                    val leftAction = parseSingle(left)
+                    if (leftAction.action != CommandAction.UNKNOWN) {
+                        val rightActions = trySplitActions(right)
+                        if (rightActions.isNotEmpty() && rightActions.none { it.action == CommandAction.UNKNOWN }) {
+                            return listOf(leftAction) + rightActions
+                        } else {
+                            // If the second segment is not independently recognised, preserve it as a follow-up instead
+                            return listOf(leftAction.copy(followUp = right))
+                        }
                     }
-                } else {
-                    actions.add(parsedSingle)
-                    break
                 }
             }
         }
 
-        return CommandPlan(originalText = text, actions = actions)
+        // If no multi-action split produces valid known actions, parse as single
+        return listOf(parseSingle(trimmed))
     }
 
-    private fun parseSingle(text: String): PlannedAction {
+    fun parseSingle(text: String): PlannedAction {
         val trimmed = text.trim()
         val lower = trimmed.lowercase()
 
@@ -115,54 +123,181 @@ class CommandParser(
                 action = CommandAction.CHECK_PROJECT_STATUS,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = trimmed,
-                requiresApproval = approvalManager.requiresApproval(CommandAction.CHECK_PROJECT_STATUS, CommandCategory.DEVELOPMENT, text)
+                riskLevel = TermuxRiskLevel.READ_ONLY,
+                requiresApproval = false
             )
         }
 
-        if (lower == "check termux" || lower == "check git version" || lower == "check node version" ||
-            lower == "check npm version" || lower == "check python version" || lower == "check git status") {
-            val termuxCmd = when (lower) {
-                "check termux" -> "whoami"
-                "check git version" -> "git --version"
-                "check node version" -> "node --version"
-                "check npm version" -> "npm --version"
-                "check python version" -> "python --version"
-                "check git status" -> "git status"
-                else -> "whoami"
+        // Check commands (diagnostics, versions, voice tool resolution)
+        if (lower.startsWith("check ")) {
+            val target = lower.substring(6).trim()
+            when (target) {
+                "project status" -> {
+                    return PlannedAction(
+                        action = CommandAction.CHECK_PROJECT_STATUS,
+                        category = CommandCategory.DEVELOPMENT,
+                        rawArguments = trimmed,
+                        riskLevel = TermuxRiskLevel.READ_ONLY,
+                        requiresApproval = false
+                    )
+                }
+                "git version" -> {
+                    return PlannedAction(
+                        action = CommandAction.TERMUX_COMMAND,
+                        category = CommandCategory.DEVELOPMENT,
+                        rawArguments = "git --version",
+                        riskLevel = TermuxRiskLevel.READ_ONLY,
+                        requiresApproval = false
+                    )
+                }
+                "node version" -> {
+                    return PlannedAction(
+                        action = CommandAction.TERMUX_COMMAND,
+                        category = CommandCategory.DEVELOPMENT,
+                        rawArguments = "node --version",
+                        riskLevel = TermuxRiskLevel.READ_ONLY,
+                        requiresApproval = false
+                    )
+                }
+                "npm version" -> {
+                    return PlannedAction(
+                        action = CommandAction.TERMUX_COMMAND,
+                        category = CommandCategory.DEVELOPMENT,
+                        rawArguments = "npm --version",
+                        riskLevel = TermuxRiskLevel.READ_ONLY,
+                        requiresApproval = false
+                    )
+                }
+                "python version" -> {
+                    return PlannedAction(
+                        action = CommandAction.TERMUX_COMMAND,
+                        category = CommandCategory.DEVELOPMENT,
+                        rawArguments = "python --version",
+                        riskLevel = TermuxRiskLevel.READ_ONLY,
+                        requiresApproval = false
+                    )
+                }
+                "git status" -> {
+                    return PlannedAction(
+                        action = CommandAction.TERMUX_COMMAND,
+                        category = CommandCategory.DEVELOPMENT,
+                        rawArguments = "git status",
+                        riskLevel = TermuxRiskLevel.READ_ONLY,
+                        requiresApproval = false
+                    )
+                }
+                else -> {
+                    // Reuse ToolCommandMatcher for voice tool fuzzy matching
+                    val matchOutcome = toolMatcher.matchSingleTarget(target)
+                    if (matchOutcome is ToolMatchOutcome.Success) {
+                        val tool = matchOutcome.result.tool
+                        if (tool.id == "termux") {
+                            return PlannedAction(
+                                action = CommandAction.TERMUX_COMMAND,
+                                category = CommandCategory.DEVELOPMENT,
+                                rawArguments = "whoami",
+                                riskLevel = TermuxRiskLevel.READ_ONLY,
+                                requiresApproval = false
+                            )
+                        } else if (tool.id == "github") {
+                            return PlannedAction(
+                                action = CommandAction.CHECK_GITHUB,
+                                category = CommandCategory.DEVELOPMENT,
+                                targetAppOrPerson = "github",
+                                requiresApproval = false
+                            )
+                        } else {
+                            return PlannedAction(
+                                action = CommandAction.OPEN_APP,
+                                category = CommandCategory.DEVICE_ACTION,
+                                targetAppOrPerson = tool.name,
+                                requiresApproval = false
+                            )
+                        }
+                    }
+                }
             }
-            return PlannedAction(
-                action = CommandAction.TERMUX_COMMAND,
-                category = CommandCategory.DEVELOPMENT,
-                rawArguments = termuxCmd,
-                requiresApproval = approvalManager.requiresApproval(CommandAction.TERMUX_COMMAND, CommandCategory.DEVELOPMENT, text)
-            )
         }
 
         if (lower.startsWith("termux ")) {
             val cmd = trimmed.substring(7).trim()
+            val risk = TermuxCommandClassifier.classifyCommandLine(cmd)
+            val requiresApproval = TermuxCommandClassifier.requiresApproval(risk)
+            val proposal = if (requiresApproval) {
+                CommandProposal(
+                    tool = "Termux",
+                    workspace = "Active Workspace",
+                    command = cmd,
+                    riskLevel = risk,
+                    reason = "Explicit shell command execution"
+                )
+            } else null
             return PlannedAction(
                 action = CommandAction.TERMUX_COMMAND,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = cmd,
-                requiresApproval = approvalManager.requiresApproval(CommandAction.TERMUX_COMMAND, CommandCategory.DEVELOPMENT, text)
+                riskLevel = risk,
+                requiresApproval = requiresApproval,
+                proposal = proposal
+            )
+        }
+
+        // Direct command strings: git, gradle, npm
+        if (lower.startsWith("git ") || lower.startsWith("npm ") || lower.startsWith("gradle ") || lower.startsWith("./gradlew ")) {
+            val risk = TermuxCommandClassifier.classifyCommandLine(trimmed)
+            val requiresApproval = TermuxCommandClassifier.requiresApproval(risk)
+            val proposal = if (requiresApproval) {
+                CommandProposal(
+                    tool = "Termux",
+                    workspace = "Active Workspace",
+                    command = trimmed,
+                    riskLevel = risk,
+                    reason = "Direct development tool execution"
+                )
+            } else null
+            return PlannedAction(
+                action = CommandAction.TERMUX_COMMAND,
+                category = CommandCategory.DEVELOPMENT,
+                rawArguments = trimmed,
+                riskLevel = risk,
+                requiresApproval = requiresApproval,
+                proposal = proposal
             )
         }
 
         if (lower == "run tests" || lower == "run test") {
+            val proposal = CommandProposal(
+                tool = "Termux",
+                workspace = "Active Workspace",
+                command = "test",
+                riskLevel = TermuxRiskLevel.MUTATING,
+                reason = "Run test suite for project"
+            )
             return PlannedAction(
                 action = CommandAction.TERMUX_COMMAND,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = "test",
-                requiresApproval = approvalManager.requiresApproval(CommandAction.TERMUX_COMMAND, CommandCategory.DEVELOPMENT, text)
+                riskLevel = TermuxRiskLevel.MUTATING,
+                requiresApproval = true,
+                proposal = proposal
             )
         }
 
         if (lower == "build project" || lower == "build app") {
+            val proposal = CommandProposal(
+                tool = "Termux",
+                workspace = "Active Workspace",
+                command = "build",
+                riskLevel = TermuxRiskLevel.MUTATING,
+                reason = "Build project artifacts"
+            )
             return PlannedAction(
                 action = CommandAction.TERMUX_COMMAND,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = "build",
-                requiresApproval = approvalManager.requiresApproval(CommandAction.TERMUX_COMMAND, CommandCategory.DEVELOPMENT, text)
+                riskLevel = TermuxRiskLevel.MUTATING,
+                requiresApproval = true,
+                proposal = proposal
             )
         }
 
@@ -177,11 +312,21 @@ class CommandParser(
         }
 
         if (lower.startsWith("build ")) {
+            val arg = trimmed.substring(6).trim()
+            val proposal = CommandProposal(
+                tool = "Termux",
+                workspace = "Active Workspace",
+                command = "build $arg",
+                riskLevel = TermuxRiskLevel.MUTATING,
+                reason = "Build command: $arg"
+            )
             return PlannedAction(
                 action = CommandAction.BUILD,
                 category = CommandCategory.DEVELOPMENT,
-                rawArguments = trimmed.substring(6).trim(),
-                requiresApproval = approvalManager.requiresApproval(CommandAction.BUILD, CommandCategory.DEVELOPMENT, text)
+                rawArguments = arg,
+                riskLevel = TermuxRiskLevel.MUTATING,
+                requiresApproval = true,
+                proposal = proposal
             )
         }
 
@@ -194,39 +339,82 @@ class CommandParser(
             )
         }
 
-        if (lower.startsWith("push ") || lower == "push") {
+        if (lower.startsWith("push ") || lower == "push" || lower == "push code") {
+            val proposal = CommandProposal(
+                tool = "Termux",
+                workspace = "Active Workspace",
+                command = "git push",
+                riskLevel = TermuxRiskLevel.PUBLISHING,
+                reason = "Publish commits to git remote"
+            )
             return PlannedAction(
                 action = CommandAction.PUSH,
                 category = CommandCategory.DEVELOPMENT,
-                rawArguments = trimmed.removePrefix("push").trim().ifBlank { null },
-                requiresApproval = approvalManager.requiresApproval(CommandAction.PUSH, CommandCategory.DEVELOPMENT, text)
+                rawArguments = trimmed.removePrefix("push").removePrefix("code").trim().ifBlank { null },
+                riskLevel = TermuxRiskLevel.PUBLISHING,
+                requiresApproval = true,
+                proposal = proposal
             )
         }
 
         if (lower.startsWith("delete ")) {
+            val arg = trimmed.substring(7).trim()
+            val proposal = CommandProposal(
+                tool = "Termux",
+                workspace = "Active Workspace",
+                command = "rm -rf $arg",
+                riskLevel = TermuxRiskLevel.DESTRUCTIVE,
+                reason = "Permanently delete files or directories"
+            )
             return PlannedAction(
                 action = CommandAction.DELETE,
                 category = CommandCategory.DEVELOPMENT,
-                rawArguments = trimmed.substring(7).trim(),
-                requiresApproval = approvalManager.requiresApproval(CommandAction.DELETE, CommandCategory.DEVELOPMENT, text)
+                rawArguments = arg,
+                riskLevel = TermuxRiskLevel.DESTRUCTIVE,
+                requiresApproval = true,
+                proposal = proposal
             )
         }
 
         if (lower.startsWith("overwrite ")) {
+            val arg = trimmed.substring(10).trim()
+            val proposal = CommandProposal(
+                tool = "Termux",
+                workspace = "Active Workspace",
+                command = "overwrite $arg",
+                riskLevel = TermuxRiskLevel.DESTRUCTIVE,
+                reason = "Overwrite existing content"
+            )
             return PlannedAction(
                 action = CommandAction.OVERWRITE,
                 category = CommandCategory.DEVELOPMENT,
-                rawArguments = trimmed.substring(10).trim(),
-                requiresApproval = approvalManager.requiresApproval(CommandAction.OVERWRITE, CommandCategory.DEVELOPMENT, text)
+                rawArguments = arg,
+                riskLevel = TermuxRiskLevel.DESTRUCTIVE,
+                requiresApproval = true,
+                proposal = proposal
             )
         }
 
         if (lower.startsWith("run ")) {
+            val arg = trimmed.substring(4).trim()
+            val risk = TermuxCommandClassifier.classifyCommandLine(arg)
+            val requiresApproval = TermuxCommandClassifier.requiresApproval(risk)
+            val proposal = if (requiresApproval) {
+                CommandProposal(
+                    tool = "Termux",
+                    workspace = "Active Workspace",
+                    command = arg,
+                    riskLevel = risk,
+                    reason = "Run command: $arg"
+                )
+            } else null
             return PlannedAction(
                 action = CommandAction.RUN_COMMAND,
                 category = CommandCategory.DEVELOPMENT,
-                rawArguments = trimmed.substring(4).trim(),
-                requiresApproval = approvalManager.requiresApproval(CommandAction.RUN_COMMAND, CommandCategory.DEVELOPMENT, text)
+                rawArguments = arg,
+                riskLevel = risk,
+                requiresApproval = requiresApproval,
+                proposal = proposal
             )
         }
 

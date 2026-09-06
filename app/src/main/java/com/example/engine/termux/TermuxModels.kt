@@ -45,7 +45,8 @@ data class TermuxCommandRequest(
     val workingDirectory: String? = null,
     val background: Boolean = true,
     val description: String = "",
-    val riskLevel: TermuxRiskLevel = TermuxRiskLevel.READ_ONLY
+    val riskLevel: TermuxRiskLevel = TermuxRiskLevel.READ_ONLY,
+    val timeoutMs: Long? = null
 )
 
 data class TermuxExecutionResult(

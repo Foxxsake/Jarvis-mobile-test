@@ -8,7 +8,10 @@ class FakeTermuxWorker(
         connectionState = TermuxConnectionState.READY,
         termuxVersion = "0.118.0",
         detailMessage = "Termux bridge verified working."
-    )
+    ),
+    var shouldSimulateTimeout: Boolean = false,
+    var mockBranchResult: TermuxExecutionResult? = null,
+    var customHandler: ((TermuxCommandRequest) -> TermuxExecutionResult?)? = null
 ) : TermuxWorker {
 
     val executedRequests = mutableListOf<TermuxCommandRequest>()
@@ -83,6 +86,17 @@ class FakeTermuxWorker(
             )
         }
 
+        if (shouldSimulateTimeout) {
+            return TermuxExecutionResult(
+                status = TermuxExecutionStatus.TIMED_OUT,
+                message = "Termux command execution timed out after simulated policy interval.",
+                startTimeMillis = System.currentTimeMillis(),
+                endTimeMillis = System.currentTimeMillis() + 100
+            )
+        }
+
+        customHandler?.invoke(request)?.let { return it }
+
         val execName = request.executablePath.substringAfterLast('/')
         val startTime = System.currentTimeMillis()
 
@@ -122,7 +136,7 @@ class FakeTermuxWorker(
                         startTimeMillis = startTime,
                         endTimeMillis = startTime + 25
                     )
-                    "branch" -> TermuxExecutionResult(
+                    "branch" -> mockBranchResult ?: TermuxExecutionResult(
                         status = TermuxExecutionStatus.SUCCESS,
                         exitCode = 0,
                         stdout = "main",

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.ActivityLog
 import com.example.data.ActivityRepository
 import com.example.data.SettingsManager
+import com.example.engine.ActionExecutionState
 import com.example.engine.CommandAction
 import com.example.engine.CommandPlan
 import com.example.engine.CommandParser
@@ -33,6 +34,7 @@ data class JarvisUiState(
     val lastRecognizedText: String = "",
     val speechEventId: Long = 0L,
     val pendingApproval: CommandPlan? = null,
+    val pendingActionIndex: Int = 0,
     val planToApprove: String? = null,
     val resolvedContact: ContactResolutionResult.Resolved? = null,
     val ambiguousQuery: String? = null,
@@ -135,17 +137,7 @@ class JarvisViewModel(
                 return@launch
             }
 
-            val executionPlan = taskRouter.route(plan)
-            
-            if (plan.requiresApproval) {
-                _uiState.value = _uiState.value.copy(
-                    status = "Waiting for approval",
-                    pendingApproval = plan,
-                    planToApprove = executionPlan.steps.joinToString("\n")
-                )
-            } else {
-                execute(plan, executionPlan.steps.joinToString("\n"))
-            }
+            executePlan(plan, startIndex = 0)
         }
     }
 
@@ -236,23 +228,58 @@ class JarvisViewModel(
     }
 
     fun approvePending() {
-        val pending = _uiState.value.pendingApproval
-        val planText = _uiState.value.planToApprove
+        val pending = _uiState.value.pendingApproval ?: return
+        val currentIndex = _uiState.value.pendingActionIndex
         val resolved = _uiState.value.resolvedContact
 
-        if (pending != null) {
+        // Contact flow approval (calls/texts/emails)
+        if (resolved != null && pending.actions.size == 1) {
             viewModelScope.launch {
-                execute(pending, planText ?: "", resolved)
+                executeSingle(pending, _uiState.value.planToApprove ?: "", resolved)
             }
+            clearApproval()
+            return
         }
-        clearApproval()
+
+        // Action-by-action approval for plans
+        val updatedActions = pending.actions.toMutableList()
+        if (currentIndex in updatedActions.indices) {
+            updatedActions[currentIndex] = updatedActions[currentIndex].copy(
+                state = ActionExecutionState.RUNNING,
+                requiresApproval = false
+            )
+        }
+        val updatedPlan = pending.copy(actions = updatedActions)
+
+        _uiState.value = _uiState.value.copy(
+            pendingApproval = null,
+            planToApprove = null,
+            status = "Approved, executing action ${currentIndex + 1}..."
+        )
+
+        viewModelScope.launch {
+            executePlan(updatedPlan, startIndex = currentIndex, resolvedContact = resolved)
+        }
     }
 
     fun rejectPending() {
         val pending = _uiState.value.pendingApproval
+        val currentIndex = _uiState.value.pendingActionIndex
         if (pending != null) {
-            for (action in pending.actions) {
-                logActivity(pending.originalText, action, "User rejected action", "REJECTED", "User rejected proposed command action.")
+            if (currentIndex in pending.actions.indices) {
+                val rejectedAction = pending.actions[currentIndex].copy(state = ActionExecutionState.REJECTED)
+                logActivity(
+                    pending.originalText,
+                    rejectedAction,
+                    "Action ${currentIndex + 1}: ${rejectedAction.action.name}",
+                    "REJECTED",
+                    "User rejected proposed command action."
+                )
+                skipRemainingActions(pending, currentIndex + 1, "Action ${currentIndex + 1} was rejected by user")
+            } else {
+                for (action in pending.actions) {
+                    logActivity(pending.originalText, action, "User rejected action", "REJECTED", "User rejected proposed command action.")
+                }
             }
         }
         clearApproval()
@@ -278,6 +305,7 @@ class JarvisViewModel(
         _uiState.value = _uiState.value.copy(
             status = "Ready",
             pendingApproval = null,
+            pendingActionIndex = 0,
             planToApprove = null,
             resolvedContact = null,
             ambiguousCandidates = null,
@@ -288,36 +316,111 @@ class JarvisViewModel(
         )
     }
 
-    private suspend fun execute(
+    private suspend fun executeSingle(
         plan: CommandPlan,
         planText: String,
+        resolvedContact: ContactResolutionResult.Resolved?
+    ) {
+        val action = plan.actions.first()
+        val result = toolExecutor.executeAction(action, resolvedContact, localProcessingEnabled.value)
+        logActivity(
+            plan.originalText,
+            action,
+            planText.take(50),
+            result.status.name,
+            result.message
+        )
+        _uiState.value = _uiState.value.copy(status = "Ready")
+    }
+
+    private suspend fun executePlan(
+        plan: CommandPlan,
+        startIndex: Int = 0,
         resolvedContact: ContactResolutionResult.Resolved? = null
     ) {
-        val lines = planText.split("\n")
-        for ((index, action) in plan.actions.withIndex()) {
-            val actionDesc = if (plan.actions.size == 1) planText else lines.getOrNull(index) ?: "Action ${index + 1}"
-            
+        for (i in startIndex until plan.actions.size) {
+            val action = plan.actions[i]
+
+            // Action-by-action approval check
+            if (action.requiresApproval && action.state != ActionExecutionState.RUNNING) {
+                val proposal = action.proposal
+                val details = buildString {
+                    if (plan.actions.size > 1) {
+                        appendLine("Action ${i + 1} of ${plan.actions.size}: ${action.action.name}")
+                    }
+                    if (proposal != null) {
+                        appendLine("Command: ${proposal.command}")
+                        appendLine("Tool: ${proposal.tool}")
+                        val ws = workspaceRegistry.getActiveWorkspace()?.displayName ?: proposal.workspace
+                        appendLine("Workspace: $ws")
+                        appendLine("Risk: ${proposal.riskLevel.name}")
+                        appendLine("Reason: ${proposal.reason}")
+                    } else if (!action.rawArguments.isNullOrBlank()) {
+                        appendLine("Arguments: ${action.rawArguments}")
+                    }
+                }.trim()
+
+                _uiState.value = _uiState.value.copy(
+                    status = "Waiting for approval: ${action.action.name}",
+                    pendingApproval = plan,
+                    pendingActionIndex = i,
+                    planToApprove = details
+                )
+                return // Pause execution until user approves or rejects this specific action
+            }
+
             if (action.action == CommandAction.UNKNOWN) {
                 logActivity(
                     plan.originalText,
                     action,
-                    actionDesc.take(50),
+                    "Action ${i + 1}",
                     ToolExecutionStatus.NOT_IMPLEMENTED.name,
                     "Command not recognized locally. Requires AI engine."
                 )
+                if (!plan.continueOnFailure) {
+                    skipRemainingActions(plan, i + 1, "Unrecognized command")
+                    _uiState.value = _uiState.value.copy(status = "Plan stopped: Unrecognized command")
+                    return
+                }
                 continue
             }
 
+            _uiState.value = _uiState.value.copy(
+                status = "Executing ${action.action.name}..."
+            )
+
             val result = toolExecutor.executeAction(action, resolvedContact, localProcessingEnabled.value)
+
             logActivity(
                 plan.originalText,
                 action,
-                actionDesc.take(50),
+                "Action ${i + 1}: ${action.action.name}",
                 result.status.name,
                 result.message
             )
+
+            val isSuccess = result.status == ToolExecutionStatus.SUCCESS
+            if (!isSuccess && !plan.continueOnFailure) {
+                skipRemainingActions(plan, i + 1, "Previous action '${action.action.name}' failed (${result.status.name})")
+                _uiState.value = _uiState.value.copy(status = "Plan stopped: Action ${i + 1} failed")
+                return
+            }
         }
-        _uiState.value = _uiState.value.copy(status = "Ready")
+
+        _uiState.value = _uiState.value.copy(status = "Ready", pendingApproval = null, planToApprove = null)
+    }
+
+    private fun skipRemainingActions(plan: CommandPlan, fromIndex: Int, reason: String) {
+        for (j in fromIndex until plan.actions.size) {
+            val skippedAction = plan.actions[j].copy(state = ActionExecutionState.SKIPPED)
+            logActivity(
+                plan.originalText,
+                skippedAction,
+                "Action ${j + 1}: ${skippedAction.action.name}",
+                ToolExecutionStatus.SKIPPED.name,
+                "Skipped because previous action failed: $reason"
+            )
+        }
     }
 
     fun toggleToolEnabled(toolId: String, enabled: Boolean) {

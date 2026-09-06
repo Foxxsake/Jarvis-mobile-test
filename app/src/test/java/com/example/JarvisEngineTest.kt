@@ -839,7 +839,7 @@ class JarvisEngineTest {
         val plan = parser.parse("check termux")
         val result = localExecutor.executeAction(plan.actions.first())
 
-        assertEquals(ToolExecutionStatus.FAILED, result.status)
+        assertEquals(ToolExecutionStatus.PERMISSION_REQUIRED, result.status)
         assertTrue(result.message.contains("Permission required"))
     }
 
@@ -858,8 +858,8 @@ class JarvisEngineTest {
         val plan = parser.parse("check project status")
         val result = localExecutor.executeAction(plan.actions.first())
 
-        assertEquals(ToolExecutionStatus.FAILED, result.status)
-        assertTrue(result.message.contains("WORKSPACE_REQUIRED"))
+        assertEquals(ToolExecutionStatus.WORKSPACE_REQUIRED, result.status)
+        assertTrue(result.message.contains("No active workspace"))
     }
 
     @Test
@@ -1098,6 +1098,185 @@ class JarvisEngineTest {
         assertEquals(com.example.engine.termux.TermuxConnectionState.READY, probed.connectionState)
         assertTrue(probed.isExternalAppsAllowed)
         assertTrue(probed.detailMessage!!.contains("verified working"))
+    }
+
+    // --- PASS 4.3: TERMUX SAFETY + REAL PROJECT EXECUTION FOUNDATION TESTS ---
+
+    @Test
+    fun `git branch delete uppercase D is classified as DESTRUCTIVE`() {
+        val risk = com.example.engine.termux.TermuxCommandClassifier.classify("git", listOf("branch", "-D", "feature-branch"))
+        assertEquals(com.example.engine.termux.TermuxRiskLevel.DESTRUCTIVE, risk)
+    }
+
+    @Test
+    fun `git branch delete lowercase d is classified as DESTRUCTIVE`() {
+        val risk = com.example.engine.termux.TermuxCommandClassifier.classify("git", listOf("branch", "-d", "feature-branch"))
+        assertEquals(com.example.engine.termux.TermuxRiskLevel.DESTRUCTIVE, risk)
+    }
+
+    @Test
+    fun `git branch long flag delete is classified as DESTRUCTIVE`() {
+        val risk = com.example.engine.termux.TermuxCommandClassifier.classify("git", listOf("branch", "--delete", "feature-branch"))
+        assertEquals(com.example.engine.termux.TermuxRiskLevel.DESTRUCTIVE, risk)
+    }
+
+    @Test
+    fun `git branch rename is classified as MUTATING`() {
+        val risk = com.example.engine.termux.TermuxCommandClassifier.classify("git", listOf("branch", "-m", "old", "new"))
+        assertEquals(com.example.engine.termux.TermuxRiskLevel.MUTATING, risk)
+    }
+
+    @Test
+    fun `git branch list is classified as READ_ONLY`() {
+        val risk = com.example.engine.termux.TermuxCommandClassifier.classify("git", listOf("branch", "-a"))
+        assertEquals(com.example.engine.termux.TermuxRiskLevel.READ_ONLY, risk)
+    }
+
+    @Test
+    fun `rm with rf flag is classified as DESTRUCTIVE`() {
+        val risk = com.example.engine.termux.TermuxCommandClassifier.classify("rm", listOf("-rf", "/tmp/old"))
+        assertEquals(com.example.engine.termux.TermuxRiskLevel.DESTRUCTIVE, risk)
+    }
+
+    @Test
+    fun `git reset hard is classified as DESTRUCTIVE`() {
+        val risk = com.example.engine.termux.TermuxCommandClassifier.classify("git", listOf("reset", "--hard", "HEAD~1"))
+        assertEquals(com.example.engine.termux.TermuxRiskLevel.DESTRUCTIVE, risk)
+    }
+
+    @Test
+    fun `git push is classified as PUBLISHING`() {
+        val risk = com.example.engine.termux.TermuxCommandClassifier.classify("git", listOf("push", "origin", "main"))
+        assertEquals(com.example.engine.termux.TermuxRiskLevel.PUBLISHING, risk)
+    }
+
+    @Test
+    fun `TermuxTimeoutPolicy enforces risk-based limits`() {
+        val reqDiag = com.example.engine.termux.TermuxCommandRequest("/data/data/com.termux/files/usr/bin/whoami", emptyList(), "")
+        assertEquals(com.example.engine.termux.TermuxTimeoutPolicy.TIMEOUT_FAST_DIAGNOSTIC_MS, com.example.engine.termux.TermuxTimeoutPolicy.getTimeoutMs(reqDiag))
+
+        val reqGitRead = com.example.engine.termux.TermuxCommandRequest("/data/data/com.termux/files/usr/bin/git", listOf("status"), "")
+        assertEquals(com.example.engine.termux.TermuxTimeoutPolicy.TIMEOUT_GIT_READ_MS, com.example.engine.termux.TermuxTimeoutPolicy.getTimeoutMs(reqGitRead))
+
+        val reqPush = com.example.engine.termux.TermuxCommandRequest("/data/data/com.termux/files/usr/bin/git", listOf("push"), "")
+        assertEquals(com.example.engine.termux.TermuxTimeoutPolicy.TIMEOUT_NETWORK_GIT_MS, com.example.engine.termux.TermuxTimeoutPolicy.getTimeoutMs(reqPush))
+
+        val reqBuild = com.example.engine.termux.TermuxCommandRequest("/data/data/com.termux/files/usr/bin/npm", listOf("build"), "")
+        assertEquals(com.example.engine.termux.TermuxTimeoutPolicy.TIMEOUT_BUILD_MS, com.example.engine.termux.TermuxTimeoutPolicy.getTimeoutMs(reqBuild))
+    }
+
+    @Test
+    fun `ProjectDetector detects Android Gradle wrapper commands`() {
+        val files = setOf("gradlew", "build.gradle.kts", "app", "settings.gradle.kts")
+        val testResult = com.example.engine.project.ProjectDetector.detectTestCommand(files)
+        assertTrue(testResult is com.example.engine.project.TestCommandResult.Detected)
+        assertEquals("./gradlew :app:testDebugUnitTest", (testResult as com.example.engine.project.TestCommandResult.Detected).command)
+
+        val buildResult = com.example.engine.project.ProjectDetector.detectBuildCommand(files)
+        assertTrue(buildResult is com.example.engine.project.BuildCommandResult.Detected)
+        assertEquals("./gradlew :app:assembleDebug", (buildResult as com.example.engine.project.BuildCommandResult.Detected).command)
+    }
+
+    @Test
+    fun `ProjectDetector detects Node npm test command with package json script`() {
+        val files = setOf("package.json")
+        val pkgJson = """{"scripts": {"test": "jest", "build": "next build"}}"""
+        val testResult = com.example.engine.project.ProjectDetector.detectTestCommand(files, packageJsonContent = pkgJson)
+        assertTrue(testResult is com.example.engine.project.TestCommandResult.Detected)
+        assertEquals("npm test", (testResult as com.example.engine.project.TestCommandResult.Detected).command)
+
+        val buildResult = com.example.engine.project.ProjectDetector.detectBuildCommand(files, packageJsonContent = pkgJson)
+        assertTrue(buildResult is com.example.engine.project.BuildCommandResult.Detected)
+        assertEquals("npm run build", (buildResult as com.example.engine.project.BuildCommandResult.Detected).command)
+    }
+
+    @Test
+    fun `ProjectDetector reports explanation when package json lacks test script`() {
+        val files = setOf("package.json")
+        val pkgJson = """{"scripts": {"start": "node index.js"}}"""
+        val testResult = com.example.engine.project.ProjectDetector.detectTestCommand(files, packageJsonContent = pkgJson)
+        assertTrue(testResult is com.example.engine.project.TestCommandResult.NotDetected)
+        assertTrue((testResult as com.example.engine.project.TestCommandResult.NotDetected).explanation.contains("NO_TEST_COMMAND_DETECTED"))
+    }
+
+    @Test
+    fun `WorkspaceValidation rejects empty and nonexistent non-termux paths`() {
+        val registry = com.example.data.workspace.LocalWorkspaceRegistry()
+        val emptyResult = registry.validatePath("")
+        assertFalse(emptyResult.isUsable)
+        assertEquals(com.example.data.workspace.WorkspaceValidationStatus.PATH_EMPTY, emptyResult.status)
+
+        val fakePath = "/path/that/definitely/does/not/exist/abcxyz"
+        val nonExistentResult = registry.validatePath(fakePath)
+        assertFalse(nonExistentResult.isUsable)
+        assertEquals(com.example.data.workspace.WorkspaceValidationStatus.DIRECTORY_DOES_NOT_EXIST, nonExistentResult.status)
+    }
+
+    @Test
+    fun `multi-action splitting with and then connector`() {
+        val plan = parser.parse("check project status and then push code")
+        assertEquals(2, plan.actions.size)
+        assertEquals(CommandAction.CHECK_PROJECT_STATUS, plan.actions[0].action)
+        assertFalse(plan.actions[0].requiresApproval)
+
+        assertEquals(CommandAction.PUSH, plan.actions[1].action)
+        assertTrue(plan.actions[1].requiresApproval)
+        assertNotNull(plan.actions[1].proposal)
+        assertEquals("git push", plan.actions[1].proposal?.command)
+        assertEquals(com.example.engine.termux.TermuxRiskLevel.PUBLISHING, plan.actions[1].proposal?.riskLevel)
+    }
+
+    @Test
+    fun `multi-action splitting with semicolon connector`() {
+        val plan = parser.parse("check project status; run tests")
+        assertEquals(2, plan.actions.size)
+        assertEquals(CommandAction.CHECK_PROJECT_STATUS, plan.actions[0].action)
+        assertEquals(CommandAction.TERMUX_COMMAND, plan.actions[1].action)
+        assertEquals("test", plan.actions[1].rawArguments)
+    }
+
+    @Test
+    fun `unrecognized second segment in multi-action becomes follow-up instead of fake action`() {
+        val plan = parser.parse("check project status and then foobarbaznotacommand")
+        assertEquals(1, plan.actions.size)
+        assertEquals(CommandAction.CHECK_PROJECT_STATUS, plan.actions[0].action)
+        assertEquals("foobarbaznotacommand", plan.actions[0].followUp)
+    }
+
+    @Test
+    fun `voice fuzzy match routes to registered tool`() {
+        val plan = parser.parse("check pydroid")
+        assertEquals(CommandAction.OPEN_APP, plan.actions.first().action)
+        assertEquals("Pydroid 3", plan.actions.first().targetAppOrPerson)
+    }
+
+    @Test
+    fun `voice fuzzy match for github routes to CHECK_GITHUB`() {
+        val plan = parser.parse("check github")
+        assertEquals(CommandAction.CHECK_GITHUB, plan.actions.first().action)
+    }
+
+    @Test
+    fun `voice fuzzy match for termux routes to TERMUX_COMMAND`() {
+        val plan = parser.parse("check termux")
+        assertEquals(CommandAction.TERMUX_COMMAND, plan.actions.first().action)
+        assertEquals("whoami", plan.actions.first().rawArguments)
+    }
+
+    @Test
+    fun `proposal generated for git branch -D`() {
+        val plan = parser.parse("git branch -D old-feature")
+        val action = plan.actions.first()
+        assertTrue(action.requiresApproval)
+        assertNotNull(action.proposal)
+        assertEquals("git branch -D old-feature", action.proposal?.command)
+        assertEquals(com.example.engine.termux.TermuxRiskLevel.DESTRUCTIVE, action.proposal?.riskLevel)
+    }
+
+    @Test
+    fun `CommandPlan continueOnFailure defaults to false`() {
+        val plan = parser.parse("check project status and then push code")
+        assertFalse(plan.continueOnFailure)
     }
 }
 

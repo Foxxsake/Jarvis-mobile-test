@@ -233,13 +233,14 @@ class AndroidTermuxWorker(
                 )
             }
 
-            val result = withTimeoutOrNull(10000L) {
+            val timeoutMs = TermuxTimeoutPolicy.getTimeoutMs(request)
+            val result = withTimeoutOrNull(timeoutMs) {
                 resultChannel.receive()
             }
 
             return result ?: TermuxExecutionResult(
                 status = TermuxExecutionStatus.TIMED_OUT,
-                message = "Termux command execution timed out after 10 seconds.",
+                message = "Termux command execution timed out after ${timeoutMs / 1000} seconds. Note: The process may continue running in Termux in the background.",
                 startTimeMillis = startTime,
                 endTimeMillis = System.currentTimeMillis()
             )

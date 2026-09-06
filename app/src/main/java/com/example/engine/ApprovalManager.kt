@@ -1,7 +1,15 @@
 package com.example.engine
 
+import com.example.engine.termux.TermuxCommandClassifier
+import com.example.engine.termux.TermuxRiskLevel
+
 class ApprovalManager {
-    fun requiresApproval(action: CommandAction, category: CommandCategory, rawText: String): Boolean {
+    fun requiresApproval(
+        action: CommandAction,
+        category: CommandCategory,
+        rawText: String = "",
+        riskLevel: TermuxRiskLevel? = null
+    ): Boolean {
         return when (action) {
             CommandAction.OPEN_APP,
             CommandAction.OPEN_SETTINGS,
@@ -9,22 +17,12 @@ class ApprovalManager {
             CommandAction.CHECK_PROJECT_STATUS -> false
 
             CommandAction.TERMUX_COMMAND -> {
-                val lower = rawText.lowercase().trim()
-                if (lower == "check termux" || lower == "check git version" ||
-                    lower == "check node version" || lower == "check npm version" ||
-                    lower == "check python version" || lower == "check git status") {
-                    false
-                } else if (lower.startsWith("termux ")) {
-                    val sub = lower.removePrefix("termux ").trim()
-                    val parts = sub.split(" ")
-                    val exec = parts.firstOrNull() ?: ""
-                    val args = if (parts.size > 1) parts.subList(1, parts.size) else emptyList()
-                    val risk = com.example.engine.termux.TermuxCommandClassifier.classify(exec, args)
-                    com.example.engine.termux.TermuxCommandClassifier.requiresApproval(risk)
-                } else if (lower == "run tests" || lower == "build project" || lower.startsWith("run test") || lower.startsWith("build ")) {
-                    true
+                if (riskLevel != null) {
+                    TermuxCommandClassifier.requiresApproval(riskLevel)
                 } else {
-                    true
+                    val clean = rawText.removePrefix("termux ").trim()
+                    val classifiedRisk = TermuxCommandClassifier.classifyCommandLine(clean)
+                    TermuxCommandClassifier.requiresApproval(classifiedRisk)
                 }
             }
 

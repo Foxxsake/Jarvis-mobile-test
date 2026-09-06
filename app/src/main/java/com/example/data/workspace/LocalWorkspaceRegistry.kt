@@ -71,4 +71,58 @@ class LocalWorkspaceRegistry(context: Context? = null) : WorkspaceRegistry {
         }
         saveToPrefs()
     }
+
+    override fun validateWorkspace(workspace: Workspace): WorkspaceValidationResult {
+        return validatePath(workspace.localPath)
+    }
+
+    override fun validatePath(path: String): WorkspaceValidationResult {
+        if (path.isBlank()) {
+            return WorkspaceValidationResult(
+                status = WorkspaceValidationStatus.PATH_EMPTY,
+                message = "Workspace path is empty.",
+                isUsable = false
+            )
+        }
+
+        val isTermuxInternal = path.startsWith("/data/data/com.termux")
+        val dir = java.io.File(path)
+        if (!dir.exists()) {
+            if (isTermuxInternal) {
+                return WorkspaceValidationResult(
+                    status = WorkspaceValidationStatus.VALID,
+                    message = "Termux workspace path (internal Termux storage): $path",
+                    isUsable = true
+                )
+            }
+            return WorkspaceValidationResult(
+                status = WorkspaceValidationStatus.DIRECTORY_DOES_NOT_EXIST,
+                message = "Directory does not exist: $path",
+                isUsable = false
+            )
+        }
+
+        if (!dir.isDirectory) {
+            return WorkspaceValidationResult(
+                status = WorkspaceValidationStatus.NOT_A_DIRECTORY,
+                message = "Path is not a directory: $path",
+                isUsable = false
+            )
+        }
+
+        val gitDir = java.io.File(dir, ".git")
+        return if (gitDir.exists()) {
+            WorkspaceValidationResult(
+                status = WorkspaceValidationStatus.VALID,
+                message = "Valid git repository directory.",
+                isUsable = true
+            )
+        } else {
+            WorkspaceValidationResult(
+                status = WorkspaceValidationStatus.NOT_A_GIT_REPO,
+                message = "Directory exists but is not a git repository (missing .git).",
+                isUsable = true
+            )
+        }
+    }
 }

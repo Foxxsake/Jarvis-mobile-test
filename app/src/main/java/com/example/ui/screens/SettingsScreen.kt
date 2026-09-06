@@ -167,7 +167,7 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                     )
                 }
 
-                if (termux.connectionState != com.example.engine.termux.TermuxConnectionState.READY) {
+                if (termux.connectionState == com.example.engine.termux.TermuxConnectionState.SETUP_REQUIRED) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         "Setup Instructions:",
@@ -203,6 +203,14 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                         ) {
                             Text("Check Connection", style = MaterialTheme.typography.labelSmall)
                         }
+                    }
+                } else {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { viewModel.refreshTermuxStatus() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Check Connection", style = MaterialTheme.typography.labelSmall)
                     }
                 }
 

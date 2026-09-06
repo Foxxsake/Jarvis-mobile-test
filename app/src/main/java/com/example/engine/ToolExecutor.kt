@@ -13,7 +13,14 @@ enum class ToolExecutionStatus {
     NOT_IMPLEMENTED,
     CONTACT_RESOLUTION_REQUIRED,
     REQUIRES_CONNECTION,
-    FAILED
+    FAILED,
+    PERMISSION_REQUIRED,
+    SETUP_REQUIRED,
+    TIMED_OUT,
+    WORKSPACE_REQUIRED,
+    COMMAND_REJECTED,
+    NOT_SUPPORTED,
+    SKIPPED
 }
 
 data class ToolExecutionResult(
@@ -62,12 +69,29 @@ class ToolExecutor(
         }
     }
 
+    private fun truncatePreview(text: String, maxChars: Int = 400): String {
+        val trimmed = text.trim()
+        return if (trimmed.length > maxChars) {
+            trimmed.take(maxChars) + "\n... [truncated ${trimmed.length - maxChars} chars]"
+        } else {
+            trimmed
+        }
+    }
+
     private suspend fun handleCheckProjectStatus(): ToolExecutionResult {
         val workspace = workspaceRegistry.getActiveWorkspace()
             ?: return ToolExecutionResult(
-                ToolExecutionStatus.FAILED,
-                "WORKSPACE_REQUIRED: No active workspace configured. Please register a project path in Settings."
+                ToolExecutionStatus.WORKSPACE_REQUIRED,
+                "No active workspace configured. Please register a project path in Settings."
             )
+
+        val validation = workspaceRegistry.validateWorkspace(workspace)
+        if (!validation.isUsable) {
+            return ToolExecutionResult(
+                ToolExecutionStatus.WORKSPACE_REQUIRED,
+                "Invalid workspace directory (${workspace.localPath}): ${validation.message}"
+            )
+        }
 
         val request = com.example.engine.termux.TermuxCommandRequest(
             executablePath = "/data/data/com.termux/files/usr/bin/git",
@@ -88,8 +112,12 @@ class ToolExecutor(
                     riskLevel = com.example.engine.termux.TermuxRiskLevel.READ_ONLY
                 )
                 val branchRes = termuxWorker.executeCommand(branchReq)
-                val branch = branchRes.stdout.trim().ifBlank { "main" }
-                val statusText = if (result.stdout.isBlank()) "Working tree clean" else result.stdout.trim()
+                val branch = if (branchRes.status == com.example.engine.termux.TermuxExecutionStatus.SUCCESS && branchRes.stdout.isNotBlank()) {
+                    branchRes.stdout.trim()
+                } else {
+                    "unknown (branch query failed: ${branchRes.message.ifBlank { "no output" }})"
+                }
+                val statusText = if (result.stdout.isBlank()) "Working tree clean" else truncatePreview(result.stdout)
                 ToolExecutionResult(
                     ToolExecutionStatus.SUCCESS,
                     "Project [${workspace.displayName}] ($branch):\n$statusText"
@@ -98,10 +126,18 @@ class ToolExecutor(
             com.example.engine.termux.TermuxExecutionStatus.TERMUX_NOT_INSTALLED ->
                 ToolExecutionResult(ToolExecutionStatus.NOT_INSTALLED, "Termux is not installed.")
             com.example.engine.termux.TermuxExecutionStatus.PERMISSION_REQUIRED ->
-                ToolExecutionResult(ToolExecutionStatus.FAILED, "Permission required: RUN_COMMAND")
+                ToolExecutionResult(ToolExecutionStatus.PERMISSION_REQUIRED, "Permission required: RUN_COMMAND")
             com.example.engine.termux.TermuxExecutionStatus.SETUP_REQUIRED ->
-                ToolExecutionResult(ToolExecutionStatus.FAILED, "Setup required: Ensure allow-external-apps=true in ~/.termux/termux.properties")
-            else -> ToolExecutionResult(ToolExecutionStatus.FAILED, "Project status check failed: ${result.message}")
+                ToolExecutionResult(ToolExecutionStatus.SETUP_REQUIRED, "Setup required: Ensure allow-external-apps=true in ~/.termux/termux.properties")
+            com.example.engine.termux.TermuxExecutionStatus.TIMED_OUT ->
+                ToolExecutionResult(ToolExecutionStatus.TIMED_OUT, "Project status check timed out: ${result.message}")
+            com.example.engine.termux.TermuxExecutionStatus.WORKSPACE_REQUIRED ->
+                ToolExecutionResult(ToolExecutionStatus.WORKSPACE_REQUIRED, "Workspace error: ${result.message}")
+            com.example.engine.termux.TermuxExecutionStatus.COMMAND_REJECTED ->
+                ToolExecutionResult(ToolExecutionStatus.COMMAND_REJECTED, "Command rejected: ${result.message}")
+            com.example.engine.termux.TermuxExecutionStatus.NOT_SUPPORTED ->
+                ToolExecutionResult(ToolExecutionStatus.NOT_SUPPORTED, "Not supported: ${result.message}")
+            else -> ToolExecutionResult(ToolExecutionStatus.FAILED, "Project status check failed: ${truncatePreview(result.message)}")
         }
     }
 
@@ -110,7 +146,7 @@ class ToolExecutor(
         val workspace = workspaceRegistry.getActiveWorkspace()
         val workDir = workspace?.localPath ?: "/data/data/com.termux/files/home"
 
-        val request = when (rawCmd.lowercase()) {
+        val request: com.example.engine.termux.TermuxCommandRequest = when (rawCmd.lowercase()) {
             "whoami" -> com.example.engine.termux.TermuxCommandRequest(
                 executablePath = "/data/data/com.termux/files/usr/bin/whoami",
                 workingDirectory = workDir,
@@ -123,20 +159,58 @@ class ToolExecutor(
                 description = "pwd",
                 riskLevel = com.example.engine.termux.TermuxRiskLevel.READ_ONLY
             )
-            "test" -> com.example.engine.termux.TermuxCommandRequest(
-                executablePath = "/data/data/com.termux/files/usr/bin/npm",
-                arguments = listOf("test"),
-                workingDirectory = workDir,
-                description = "run tests",
-                riskLevel = com.example.engine.termux.TermuxRiskLevel.MUTATING
-            )
-            "build" -> com.example.engine.termux.TermuxCommandRequest(
-                executablePath = "/data/data/com.termux/files/usr/bin/npm",
-                arguments = listOf("run", "build"),
-                workingDirectory = workDir,
-                description = "build project",
-                riskLevel = com.example.engine.termux.TermuxRiskLevel.MUTATING
-            )
+            "test" -> {
+                val fileList = java.io.File(workDir).list()?.toSet() ?: emptySet()
+                val pkgJson = if (fileList.contains("package.json")) runCatching { java.io.File(workDir, "package.json").readText() }.getOrNull() else null
+                when (val detected = com.example.engine.project.ProjectDetector.detectTestCommand(fileList, pkgJson)) {
+                    is com.example.engine.project.TestCommandResult.NotDetected -> {
+                        return ToolExecutionResult(
+                            ToolExecutionStatus.FAILED,
+                            detected.explanation
+                        )
+                    }
+                    is com.example.engine.project.TestCommandResult.Detected -> {
+                        val cmdStr = detected.command
+                        val parts = cmdStr.split(" ")
+                        val exec = parts.first()
+                        val execPath = if (exec.startsWith("/")) exec else if (exec.startsWith("./")) "$workDir/${exec.removePrefix("./")}" else "/data/data/com.termux/files/usr/bin/$exec"
+                        val args = if (parts.size > 1) parts.subList(1, parts.size) else emptyList()
+                        com.example.engine.termux.TermuxCommandRequest(
+                            executablePath = execPath,
+                            arguments = args,
+                            workingDirectory = workDir,
+                            description = cmdStr,
+                            riskLevel = com.example.engine.termux.TermuxRiskLevel.MUTATING
+                        )
+                    }
+                }
+            }
+            "build" -> {
+                val fileList = java.io.File(workDir).list()?.toSet() ?: emptySet()
+                val pkgJson = if (fileList.contains("package.json")) runCatching { java.io.File(workDir, "package.json").readText() }.getOrNull() else null
+                when (val detected = com.example.engine.project.ProjectDetector.detectBuildCommand(fileList, pkgJson)) {
+                    is com.example.engine.project.BuildCommandResult.NotDetected -> {
+                        return ToolExecutionResult(
+                            ToolExecutionStatus.FAILED,
+                            detected.explanation
+                        )
+                    }
+                    is com.example.engine.project.BuildCommandResult.Detected -> {
+                        val cmdStr = detected.command
+                        val parts = cmdStr.split(" ")
+                        val exec = parts.first()
+                        val execPath = if (exec.startsWith("/")) exec else if (exec.startsWith("./")) "$workDir/${exec.removePrefix("./")}" else "/data/data/com.termux/files/usr/bin/$exec"
+                        val args = if (parts.size > 1) parts.subList(1, parts.size) else emptyList()
+                        com.example.engine.termux.TermuxCommandRequest(
+                            executablePath = execPath,
+                            arguments = args,
+                            workingDirectory = workDir,
+                            description = cmdStr,
+                            riskLevel = com.example.engine.termux.TermuxRiskLevel.MUTATING
+                        )
+                    }
+                }
+            }
             else -> {
                 val parts = rawCmd.split(" ")
                 val exec = parts.firstOrNull() ?: "whoami"
@@ -156,25 +230,41 @@ class ToolExecutor(
         val result = termuxWorker.executeCommand(request)
         return when (result.status) {
             com.example.engine.termux.TermuxExecutionStatus.SUCCESS ->
-                ToolExecutionResult(ToolExecutionStatus.SUCCESS, result.message.ifBlank { result.stdout })
+                ToolExecutionResult(ToolExecutionStatus.SUCCESS, truncatePreview(result.message.ifBlank { result.stdout }))
             com.example.engine.termux.TermuxExecutionStatus.TERMUX_NOT_INSTALLED ->
                 ToolExecutionResult(ToolExecutionStatus.NOT_INSTALLED, "Termux app is not installed.")
             com.example.engine.termux.TermuxExecutionStatus.PERMISSION_REQUIRED ->
-                ToolExecutionResult(ToolExecutionStatus.FAILED, "Permission required: RUN_COMMAND")
+                ToolExecutionResult(ToolExecutionStatus.PERMISSION_REQUIRED, "Permission required: RUN_COMMAND")
             com.example.engine.termux.TermuxExecutionStatus.SETUP_REQUIRED ->
-                ToolExecutionResult(ToolExecutionStatus.FAILED, "Setup required: Ensure allow-external-apps=true in ~/.termux/termux.properties")
-            com.example.engine.termux.TermuxExecutionStatus.COMMAND_REJECTED,
+                ToolExecutionResult(ToolExecutionStatus.SETUP_REQUIRED, "Setup required: Ensure allow-external-apps=true in ~/.termux/termux.properties")
+            com.example.engine.termux.TermuxExecutionStatus.TIMED_OUT ->
+                ToolExecutionResult(ToolExecutionStatus.TIMED_OUT, "Execution timed out: ${result.message}")
+            com.example.engine.termux.TermuxExecutionStatus.WORKSPACE_REQUIRED ->
+                ToolExecutionResult(ToolExecutionStatus.WORKSPACE_REQUIRED, "Workspace error: ${result.message}")
+            com.example.engine.termux.TermuxExecutionStatus.COMMAND_REJECTED ->
+                ToolExecutionResult(ToolExecutionStatus.COMMAND_REJECTED, result.message)
             com.example.engine.termux.TermuxExecutionStatus.NOT_SUPPORTED ->
-                ToolExecutionResult(ToolExecutionStatus.UNSUPPORTED, result.message)
+                ToolExecutionResult(ToolExecutionStatus.NOT_SUPPORTED, result.message)
             else ->
-                ToolExecutionResult(ToolExecutionStatus.FAILED, result.message.ifBlank { "Execution failed" })
+                ToolExecutionResult(ToolExecutionStatus.FAILED, truncatePreview(result.message.ifBlank { "Execution failed" }))
         }
     }
 
     private suspend fun handleDevelopmentAction(command: PlannedAction): ToolExecutionResult {
         if (command.action == CommandAction.PUSH) {
             val workspace = workspaceRegistry.getActiveWorkspace()
-            val workDir = workspace?.localPath ?: "/data/data/com.termux/files/home"
+                ?: return ToolExecutionResult(
+                    ToolExecutionStatus.WORKSPACE_REQUIRED,
+                    "No active workspace configured for push."
+                )
+            val validation = workspaceRegistry.validateWorkspace(workspace)
+            if (!validation.isUsable) {
+                return ToolExecutionResult(
+                    ToolExecutionStatus.WORKSPACE_REQUIRED,
+                    "Invalid workspace directory (${workspace.localPath}): ${validation.message}"
+                )
+            }
+            val workDir = workspace.localPath
             val req = com.example.engine.termux.TermuxCommandRequest(
                 executablePath = "/data/data/com.termux/files/usr/bin/git",
                 arguments = listOf("push"),
@@ -183,10 +273,19 @@ class ToolExecutor(
                 riskLevel = com.example.engine.termux.TermuxRiskLevel.PUBLISHING
             )
             val result = termuxWorker.executeCommand(req)
-            return if (result.status == com.example.engine.termux.TermuxExecutionStatus.SUCCESS) {
-                ToolExecutionResult(ToolExecutionStatus.SUCCESS, "Pushed code to git remote")
-            } else {
-                ToolExecutionResult(ToolExecutionStatus.FAILED, "Push failed: ${result.message}")
+            return when (result.status) {
+                com.example.engine.termux.TermuxExecutionStatus.SUCCESS ->
+                    ToolExecutionResult(ToolExecutionStatus.SUCCESS, "Pushed code to git remote:\n${truncatePreview(result.stdout)}")
+                com.example.engine.termux.TermuxExecutionStatus.TIMED_OUT ->
+                    ToolExecutionResult(ToolExecutionStatus.TIMED_OUT, "Push timed out: ${result.message}")
+                com.example.engine.termux.TermuxExecutionStatus.PERMISSION_REQUIRED ->
+                    ToolExecutionResult(ToolExecutionStatus.PERMISSION_REQUIRED, result.message)
+                com.example.engine.termux.TermuxExecutionStatus.SETUP_REQUIRED ->
+                    ToolExecutionResult(ToolExecutionStatus.SETUP_REQUIRED, result.message)
+                com.example.engine.termux.TermuxExecutionStatus.TERMUX_NOT_INSTALLED ->
+                    ToolExecutionResult(ToolExecutionStatus.NOT_INSTALLED, result.message)
+                else ->
+                    ToolExecutionResult(ToolExecutionStatus.FAILED, "Push failed: ${truncatePreview(result.message)}")
             }
         }
 
