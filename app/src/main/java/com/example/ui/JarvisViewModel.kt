@@ -338,15 +338,27 @@ class JarvisViewModel(
         startIndex: Int = 0,
         resolvedContact: ContactResolutionResult.Resolved? = null
     ) {
-        for (i in startIndex until plan.actions.size) {
-            val action = plan.actions[i]
+        var currentPlan = plan
+        for (i in startIndex until currentPlan.actions.size) {
+            var action = currentPlan.actions[i]
 
             // Action-by-action approval check
             if (action.requiresApproval && action.state != ActionExecutionState.RUNNING) {
+                if (action.proposal == null && action.action == CommandAction.TERMUX_COMMAND) {
+                    _uiState.value = _uiState.value.copy(status = "Inspecting workspace configuration...")
+                    val resolvedProposal = resolveCommandProposal(action)
+                    if (resolvedProposal != null) {
+                        action = action.copy(proposal = resolvedProposal)
+                        val newActions = currentPlan.actions.toMutableList()
+                        newActions[i] = action
+                        currentPlan = currentPlan.copy(actions = newActions)
+                    }
+                }
+
                 val proposal = action.proposal
                 val details = buildString {
-                    if (plan.actions.size > 1) {
-                        appendLine("Action ${i + 1} of ${plan.actions.size}: ${action.action.name}")
+                    if (currentPlan.actions.size > 1) {
+                        appendLine("Action ${i + 1} of ${currentPlan.actions.size}: ${action.action.name}")
                     }
                     if (proposal != null) {
                         appendLine("Command: ${proposal.command}")
@@ -362,7 +374,7 @@ class JarvisViewModel(
 
                 _uiState.value = _uiState.value.copy(
                     status = "Waiting for approval: ${action.action.name}",
-                    pendingApproval = plan,
+                    pendingApproval = currentPlan,
                     pendingActionIndex = i,
                     planToApprove = details
                 )
@@ -371,14 +383,14 @@ class JarvisViewModel(
 
             if (action.action == CommandAction.UNKNOWN) {
                 logActivity(
-                    plan.originalText,
+                    currentPlan.originalText,
                     action,
                     "Action ${i + 1}",
                     ToolExecutionStatus.NOT_IMPLEMENTED.name,
                     "Command not recognized locally. Requires AI engine."
                 )
-                if (!plan.continueOnFailure) {
-                    skipRemainingActions(plan, i + 1, "Unrecognized command")
+                if (!currentPlan.continueOnFailure) {
+                    skipRemainingActions(currentPlan, i + 1, "Unrecognized command")
                     _uiState.value = _uiState.value.copy(status = "Plan stopped: Unrecognized command")
                     return
                 }
@@ -392,7 +404,7 @@ class JarvisViewModel(
             val result = toolExecutor.executeAction(action, resolvedContact, localProcessingEnabled.value)
 
             logActivity(
-                plan.originalText,
+                currentPlan.originalText,
                 action,
                 "Action ${i + 1}: ${action.action.name}",
                 result.status.name,
@@ -400,14 +412,53 @@ class JarvisViewModel(
             )
 
             val isSuccess = result.status == ToolExecutionStatus.SUCCESS
-            if (!isSuccess && !plan.continueOnFailure) {
-                skipRemainingActions(plan, i + 1, "Previous action '${action.action.name}' failed (${result.status.name})")
+            if (!isSuccess && !currentPlan.continueOnFailure) {
+                skipRemainingActions(currentPlan, i + 1, "Previous action '${action.action.name}' failed (${result.status.name})")
                 _uiState.value = _uiState.value.copy(status = "Plan stopped: Action ${i + 1} failed")
                 return
             }
         }
 
         _uiState.value = _uiState.value.copy(status = "Ready", pendingApproval = null, planToApprove = null)
+    }
+
+    private suspend fun resolveCommandProposal(action: PlannedAction): com.example.engine.CommandProposal? {
+        if (action.action != CommandAction.TERMUX_COMMAND || action.proposal != null) {
+            return action.proposal
+        }
+        val ws = workspaceRegistry.getActiveWorkspace() ?: return null
+        val inspector = com.example.engine.project.TermuxWorkspaceInspector(termuxWorker)
+        val inspection = inspector.inspectWorkspace(ws)
+        
+        if (action.rawArguments == "test") {
+            val res = com.example.engine.project.ProjectDetector.detectTestCommand(
+                inspection.topLevelFiles, 
+                inspection.packageJsonContent, 
+                inspection.requirementsOrPyprojectContent
+            )
+            val isDetected = res is com.example.engine.project.TestCommandResult.Detected
+            return com.example.engine.CommandProposal(
+                tool = "Termux",
+                workspace = ws.displayName,
+                command = if (isDetected) (res as com.example.engine.project.TestCommandResult.Detected).command else "echo 'No test command detected'",
+                riskLevel = com.example.engine.termux.TermuxRiskLevel.MUTATING,
+                reason = "Run test suite: " + if (isDetected) (res as com.example.engine.project.TestCommandResult.Detected).reason else (res as com.example.engine.project.TestCommandResult.NotDetected).explanation
+            )
+        } else if (action.rawArguments == "build") {
+            val res = com.example.engine.project.ProjectDetector.detectBuildCommand(
+                inspection.topLevelFiles, 
+                inspection.packageJsonContent
+            )
+            val isDetected = res is com.example.engine.project.BuildCommandResult.Detected
+            return com.example.engine.CommandProposal(
+                tool = "Termux",
+                workspace = ws.displayName,
+                command = if (isDetected) (res as com.example.engine.project.BuildCommandResult.Detected).command else "echo 'No build command detected'",
+                riskLevel = com.example.engine.termux.TermuxRiskLevel.MUTATING,
+                reason = "Build project: " + if (isDetected) (res as com.example.engine.project.BuildCommandResult.Detected).reason else (res as com.example.engine.project.BuildCommandResult.NotDetected).explanation
+            )
+        }
+        return null
     }
 
     private fun skipRemainingActions(plan: CommandPlan, fromIndex: Int, reason: String) {

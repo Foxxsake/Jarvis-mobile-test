@@ -218,8 +218,8 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
 
             // WORKSPACE CONFIGURATION
             val activeWs = uiState.activeWorkspace
-            var wsName by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(activeWs?.displayName ?: "JARVIS Mobile") }
-            var wsPath by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(activeWs?.localPath ?: "/data/data/com.termux/files/home") }
+            var wsName by androidx.compose.runtime.remember(activeWs) { androidx.compose.runtime.mutableStateOf(activeWs?.displayName ?: "JARVIS Mobile") }
+            var wsPath by androidx.compose.runtime.remember(activeWs) { androidx.compose.runtime.mutableStateOf(activeWs?.localPath ?: "/data/data/com.termux/files/home") }
 
             SettingsSection(title = "PROJECT WORKSPACE") {
                 Text(

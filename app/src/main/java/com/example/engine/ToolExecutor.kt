@@ -146,88 +146,56 @@ class ToolExecutor(
         val workspace = workspaceRegistry.getActiveWorkspace()
         val workDir = workspace?.localPath ?: "/data/data/com.termux/files/home"
 
-        val request: com.example.engine.termux.TermuxCommandRequest = when (rawCmd.lowercase()) {
-            "whoami" -> com.example.engine.termux.TermuxCommandRequest(
-                executablePath = "/data/data/com.termux/files/usr/bin/whoami",
+        val request: com.example.engine.termux.TermuxCommandRequest = if (command.proposal != null) {
+            val cmdStr = command.proposal.command
+            val parts = cmdStr.split(" ")
+            val exec = parts.firstOrNull() ?: "whoami"
+            val execPath = if (exec.startsWith("/")) exec else if (exec.startsWith("./")) "$workDir/${exec.removePrefix("./")}" else "/data/data/com.termux/files/usr/bin/$exec"
+            val args = if (parts.size > 1) parts.subList(1, parts.size) else emptyList()
+            com.example.engine.termux.TermuxCommandRequest(
+                executablePath = execPath,
+                arguments = args,
                 workingDirectory = workDir,
-                description = "whoami",
-                riskLevel = com.example.engine.termux.TermuxRiskLevel.READ_ONLY
+                description = cmdStr,
+                riskLevel = command.proposal.riskLevel
             )
-            "pwd" -> com.example.engine.termux.TermuxCommandRequest(
-                executablePath = "/data/data/com.termux/files/usr/bin/pwd",
-                workingDirectory = workDir,
-                description = "pwd",
-                riskLevel = com.example.engine.termux.TermuxRiskLevel.READ_ONLY
-            )
-            "test" -> {
-                val fileList = java.io.File(workDir).list()?.toSet() ?: emptySet()
-                val pkgJson = if (fileList.contains("package.json")) runCatching { java.io.File(workDir, "package.json").readText() }.getOrNull() else null
-                when (val detected = com.example.engine.project.ProjectDetector.detectTestCommand(fileList, pkgJson)) {
-                    is com.example.engine.project.TestCommandResult.NotDetected -> {
-                        return ToolExecutionResult(
-                            ToolExecutionStatus.FAILED,
-                            detected.explanation
-                        )
-                    }
-                    is com.example.engine.project.TestCommandResult.Detected -> {
-                        val cmdStr = detected.command
-                        val parts = cmdStr.split(" ")
-                        val exec = parts.first()
-                        val execPath = if (exec.startsWith("/")) exec else if (exec.startsWith("./")) "$workDir/${exec.removePrefix("./")}" else "/data/data/com.termux/files/usr/bin/$exec"
-                        val args = if (parts.size > 1) parts.subList(1, parts.size) else emptyList()
-                        com.example.engine.termux.TermuxCommandRequest(
-                            executablePath = execPath,
-                            arguments = args,
-                            workingDirectory = workDir,
-                            description = cmdStr,
-                            riskLevel = com.example.engine.termux.TermuxRiskLevel.MUTATING
-                        )
-                    }
-                }
-            }
-            "build" -> {
-                val fileList = java.io.File(workDir).list()?.toSet() ?: emptySet()
-                val pkgJson = if (fileList.contains("package.json")) runCatching { java.io.File(workDir, "package.json").readText() }.getOrNull() else null
-                when (val detected = com.example.engine.project.ProjectDetector.detectBuildCommand(fileList, pkgJson)) {
-                    is com.example.engine.project.BuildCommandResult.NotDetected -> {
-                        return ToolExecutionResult(
-                            ToolExecutionStatus.FAILED,
-                            detected.explanation
-                        )
-                    }
-                    is com.example.engine.project.BuildCommandResult.Detected -> {
-                        val cmdStr = detected.command
-                        val parts = cmdStr.split(" ")
-                        val exec = parts.first()
-                        val execPath = if (exec.startsWith("/")) exec else if (exec.startsWith("./")) "$workDir/${exec.removePrefix("./")}" else "/data/data/com.termux/files/usr/bin/$exec"
-                        val args = if (parts.size > 1) parts.subList(1, parts.size) else emptyList()
-                        com.example.engine.termux.TermuxCommandRequest(
-                            executablePath = execPath,
-                            arguments = args,
-                            workingDirectory = workDir,
-                            description = cmdStr,
-                            riskLevel = com.example.engine.termux.TermuxRiskLevel.MUTATING
-                        )
-                    }
-                }
-            }
-            else -> {
-                val parts = rawCmd.split(" ")
-                val exec = parts.firstOrNull() ?: "whoami"
-                val execPath = if (exec.startsWith("/")) exec else "/data/data/com.termux/files/usr/bin/$exec"
-                val args = if (parts.size > 1) parts.subList(1, parts.size) else emptyList()
-                val risk = com.example.engine.termux.TermuxCommandClassifier.classify(exec, args)
-                com.example.engine.termux.TermuxCommandRequest(
-                    executablePath = execPath,
-                    arguments = args,
+        } else {
+            when (rawCmd.lowercase()) {
+                "whoami" -> com.example.engine.termux.TermuxCommandRequest(
+                    executablePath = "/data/data/com.termux/files/usr/bin/whoami",
                     workingDirectory = workDir,
-                    description = rawCmd,
-                    riskLevel = risk
+                    description = "whoami",
+                    riskLevel = com.example.engine.termux.TermuxRiskLevel.READ_ONLY
                 )
+                "pwd" -> com.example.engine.termux.TermuxCommandRequest(
+                    executablePath = "/data/data/com.termux/files/usr/bin/pwd",
+                    workingDirectory = workDir,
+                    description = "pwd",
+                    riskLevel = com.example.engine.termux.TermuxRiskLevel.READ_ONLY
+                )
+                "test", "build" -> {
+                    // Fallback if proposal somehow didn't generate (e.g. workspace missing)
+                    return ToolExecutionResult(ToolExecutionStatus.FAILED, "Command configuration could not be resolved.")
+                }
+                else -> {
+                    val parts = rawCmd.split(" ")
+                    val exec = parts.firstOrNull() ?: "whoami"
+                    val execPath = if (exec.startsWith("/")) exec else "/data/data/com.termux/files/usr/bin/$exec"
+                    val args = if (parts.size > 1) parts.subList(1, parts.size) else emptyList()
+                    val risk = com.example.engine.termux.TermuxCommandClassifier.classify(exec, args)
+                    com.example.engine.termux.TermuxCommandRequest(
+                        executablePath = execPath,
+                        arguments = args,
+                        workingDirectory = workDir,
+                        description = rawCmd,
+                        riskLevel = risk
+                    )
+                }
             }
         }
 
         val result = termuxWorker.executeCommand(request)
+
         return when (result.status) {
             com.example.engine.termux.TermuxExecutionStatus.SUCCESS ->
                 ToolExecutionResult(ToolExecutionStatus.SUCCESS, truncatePreview(result.message.ifBlank { result.stdout }))

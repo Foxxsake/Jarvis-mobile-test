@@ -48,36 +48,32 @@ class MainActivity : ComponentActivity() {
     private var activeViewModel: JarvisViewModel? = null
     private var hasRequestedMicPermission = false
     private var hasRequestedContactsPermission = false
+    private var currentPermissionRequest: String? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
+        val permission = currentPermissionRequest ?: return@registerForActivityResult
         activeViewModel?.let { vm ->
-            val pendingPerm = vm.uiState.value.permissionRationaleNeeded
             if (isGranted) {
-                if (pendingPerm == "MIC") {
+                if (permission == android.Manifest.permission.RECORD_AUDIO) {
                     speechManager.startListening()
-                } else if (pendingPerm == "CONTACTS") {
+                } else if (permission == android.Manifest.permission.READ_CONTACTS) {
                     val pendingCmd = vm.uiState.value.pendingApproval
                     if (pendingCmd != null) {
                         vm.submitCommand(pendingCmd.originalText)
                     }
                 }
             } else {
-                val permString = if (pendingPerm == "MIC") {
-                    android.Manifest.permission.RECORD_AUDIO
-                } else {
-                    android.Manifest.permission.READ_CONTACTS
-                }
-                val shouldShowRationale = androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(this, permString)
+                val shouldShowRationale = androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(this, permission)
                 if (!shouldShowRationale) {
-                    if (pendingPerm != null) {
-                        vm.showPermissionPermanentlyDenied(pendingPerm)
-                    }
+                    val permType = if (permission == android.Manifest.permission.RECORD_AUDIO) "MIC" else "CONTACTS"
+                    vm.showPermissionPermanentlyDenied(permType)
                 }
             }
             vm.dismissPermissionRationale()
         }
+        currentPermissionRequest = null
     }
 
     private fun openAppSettings() {
@@ -93,10 +89,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        database = Room.databaseBuilder(
-            applicationContext,
-            AppDatabase::class.java, "jarvis-database"
-        ).build()
+        database = AppDatabase.getDatabase(applicationContext)
 
         val repository = ActivityRepository(database.activityLogDao())
         settingsManager = SettingsManager(applicationContext)
@@ -193,6 +186,7 @@ class MainActivity : ComponentActivity() {
                                     } else if (permission == android.Manifest.permission.READ_CONTACTS) {
                                         hasRequestedContactsPermission = true
                                     }
+                                    currentPermissionRequest = permission
                                     permissionLauncher.launch(permission)
                                 },
                                 onDismissRationale = { viewModel.dismissPermissionRationale() },

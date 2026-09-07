@@ -62,11 +62,7 @@ class ToolRegistry(private val context: Context) {
             return outcome.result.tool
         }
 
-        val lower = clean.lowercase()
-        // 2. Fallback to substring in name or alias
-        return currentList.find { tool ->
-            tool.name.lowercase().contains(lower) || tool.aliases.any { alias -> alias.lowercase().contains(lower) }
-        }
+        return null
     }
 
     companion object {

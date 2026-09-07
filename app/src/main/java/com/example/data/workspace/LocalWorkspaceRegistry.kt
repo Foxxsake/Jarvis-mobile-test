@@ -52,10 +52,13 @@ class LocalWorkspaceRegistry(context: Context? = null) : WorkspaceRegistry {
     }
 
     override fun setActiveWorkspace(workspace: Workspace) {
-        activeWorkspaceId = workspace.id
-        if (!memoryWorkspaces.any { it.id == workspace.id }) {
+        val existingIndex = memoryWorkspaces.indexOfFirst { it.id == workspace.id }
+        if (existingIndex >= 0) {
+            memoryWorkspaces[existingIndex] = workspace
+        } else {
             memoryWorkspaces.add(workspace)
         }
+        activeWorkspaceId = workspace.id
         saveToPrefs()
     }
 
@@ -84,45 +87,24 @@ class LocalWorkspaceRegistry(context: Context? = null) : WorkspaceRegistry {
                 isUsable = false
             )
         }
-
-        val isTermuxInternal = path.startsWith("/data/data/com.termux")
-        val dir = java.io.File(path)
-        if (!dir.exists()) {
-            if (isTermuxInternal) {
+        
+        if (!path.startsWith("/data/data/com.termux/")) {
+            val file = java.io.File(path)
+            if (!file.exists()) {
                 return WorkspaceValidationResult(
-                    status = WorkspaceValidationStatus.VALID,
-                    message = "Termux workspace path (internal Termux storage): $path",
-                    isUsable = true
+                    status = WorkspaceValidationStatus.DIRECTORY_DOES_NOT_EXIST,
+                    message = "Directory does not exist.",
+                    isUsable = false
                 )
             }
-            return WorkspaceValidationResult(
-                status = WorkspaceValidationStatus.DIRECTORY_DOES_NOT_EXIST,
-                message = "Directory does not exist: $path",
-                isUsable = false
-            )
         }
-
-        if (!dir.isDirectory) {
-            return WorkspaceValidationResult(
-                status = WorkspaceValidationStatus.NOT_A_DIRECTORY,
-                message = "Path is not a directory: $path",
-                isUsable = false
-            )
-        }
-
-        val gitDir = java.io.File(dir, ".git")
-        return if (gitDir.exists()) {
-            WorkspaceValidationResult(
-                status = WorkspaceValidationStatus.VALID,
-                message = "Valid git repository directory.",
-                isUsable = true
-            )
-        } else {
-            WorkspaceValidationResult(
-                status = WorkspaceValidationStatus.NOT_A_GIT_REPO,
-                message = "Directory exists but is not a git repository (missing .git).",
-                isUsable = true
-            )
-        }
+        
+        // This class only manages metadata. Do not inspect private Termux storage using java.io.File.
+        return WorkspaceValidationResult(
+            status = WorkspaceValidationStatus.VALID,
+            message = "Path format accepted (inspection occurs via Termux commands).",
+            isUsable = true
+        )
     }
 }
+

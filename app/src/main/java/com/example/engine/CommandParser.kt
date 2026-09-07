@@ -42,22 +42,58 @@ class CommandParser(
             Regex("\\s*,\\s*")
         )
 
+        var earliestMatch: MatchResult? = null
         for (pattern in connectorPatterns) {
-            val match = pattern.find(trimmed)
-            if (match != null) {
-                val left = trimmed.substring(0, match.range.first).trim()
-                val right = trimmed.substring(match.range.last + 1).trim()
+            val matches = pattern.findAll(trimmed)
+            for (match in matches) {
+                // Check if this match is inside a communication message
+                var skip = false
+                val leftOfMatch = trimmed.substring(0, match.range.first).lowercase()
+                if (leftOfMatch.contains(":")) {
+                    val prefix = leftOfMatch.substringBefore(":")
+                    if (prefix.trim().startsWith("text ") || prefix.trim().startsWith("email ") || prefix.trim().startsWith("call ")) {
+                        skip = true
+                    }
+                }
+                if (!skip) {
+                    if (earliestMatch == null || match.range.first < earliestMatch!!.range.first) {
+                        earliestMatch = match
+                    }
+                }
+            }
+        }
 
-                if (left.isNotBlank() && right.isNotBlank()) {
-                    val leftAction = parseSingle(left)
-                    if (leftAction.action != CommandAction.UNKNOWN) {
-                        val rightActions = trySplitActions(right)
-                        if (rightActions.isNotEmpty() && rightActions.none { it.action == CommandAction.UNKNOWN }) {
-                            return listOf(leftAction) + rightActions
-                        } else {
-                            // If the second segment is not independently recognised, preserve it as a follow-up instead
-                            return listOf(leftAction.copy(followUp = right))
+        if (earliestMatch != null) {
+            val left = trimmed.substring(0, earliestMatch.range.first).trim()
+            val right = trimmed.substring(earliestMatch.range.last + 1).trim()
+
+            if (left.isNotBlank() && right.isNotBlank()) {
+                val leftAction = parseSingle(left)
+                if (leftAction.action != CommandAction.UNKNOWN) {
+                    val rightActions = trySplitActions(right)
+                    // Only split when BOTH sides parse as legitimate independent actions.
+                    if (rightActions.isNotEmpty() && rightActions.none { it.action == CommandAction.UNKNOWN }) {
+                        // Check if it's multiple communication actions, which we don't support well yet
+                        val allActions = listOf(leftAction) + rightActions
+                        val commCount = allActions.count { it.action == CommandAction.TEXT || it.action == CommandAction.EMAIL || it.action == CommandAction.CALL }
+                        if (commCount > 1) {
+                            return listOf(
+                                PlannedAction(
+                                    action = CommandAction.UNKNOWN,
+                                    category = CommandCategory.UNKNOWN,
+                                    requiresApproval = false,
+                                    rawArguments = "Multiple communication actions in one command are not safely supported yet."
+                                )
+                            )
                         }
+                        return allActions
+                    } else {
+                        // If the second segment is not independently recognised, preserve it as a follow-up instead
+                        // BUT if left action is communication, DO NOT append followUp, keep the whole string as message.
+                        if (leftAction.action == CommandAction.TEXT || leftAction.action == CommandAction.EMAIL || leftAction.action == CommandAction.CALL) {
+                            return listOf(parseSingle(trimmed)) // Just parse the whole thing
+                        }
+                        return listOf(leftAction.copy(followUp = right))
                     }
                 }
             }
@@ -266,38 +302,24 @@ class CommandParser(
         }
 
         if (lower == "run tests" || lower == "run test") {
-            val proposal = CommandProposal(
-                tool = "Termux",
-                workspace = "Active Workspace",
-                command = "test",
-                riskLevel = TermuxRiskLevel.MUTATING,
-                reason = "Run test suite for project"
-            )
             return PlannedAction(
                 action = CommandAction.TERMUX_COMMAND,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = "test",
                 riskLevel = TermuxRiskLevel.MUTATING,
                 requiresApproval = true,
-                proposal = proposal
+                proposal = null // Will be resolved by ViewModel before approval
             )
         }
 
         if (lower == "build project" || lower == "build app") {
-            val proposal = CommandProposal(
-                tool = "Termux",
-                workspace = "Active Workspace",
-                command = "build",
-                riskLevel = TermuxRiskLevel.MUTATING,
-                reason = "Build project artifacts"
-            )
             return PlannedAction(
                 action = CommandAction.TERMUX_COMMAND,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = "build",
                 riskLevel = TermuxRiskLevel.MUTATING,
                 requiresApproval = true,
-                proposal = proposal
+                proposal = null // Will be resolved by ViewModel before approval
             )
         }
 
@@ -350,7 +372,7 @@ class CommandParser(
             return PlannedAction(
                 action = CommandAction.PUSH,
                 category = CommandCategory.DEVELOPMENT,
-                rawArguments = trimmed.removePrefix("push").removePrefix("code").trim().ifBlank { null },
+                rawArguments = null, // Do not leave fake "code" argument
                 riskLevel = TermuxRiskLevel.PUBLISHING,
                 requiresApproval = true,
                 proposal = proposal
@@ -398,22 +420,19 @@ class CommandParser(
         if (lower.startsWith("run ")) {
             val arg = trimmed.substring(4).trim()
             val risk = TermuxCommandClassifier.classifyCommandLine(arg)
-            val requiresApproval = TermuxCommandClassifier.requiresApproval(risk)
-            val proposal = if (requiresApproval) {
-                CommandProposal(
-                    tool = "Termux",
-                    workspace = "Active Workspace",
-                    command = arg,
-                    riskLevel = risk,
-                    reason = "Run command: $arg"
-                )
-            } else null
+            val proposal = CommandProposal(
+                tool = "Termux",
+                workspace = "Active Workspace",
+                command = arg,
+                riskLevel = risk,
+                reason = "Explicit shell command execution"
+            )
             return PlannedAction(
                 action = CommandAction.RUN_COMMAND,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = arg,
                 riskLevel = risk,
-                requiresApproval = requiresApproval,
+                requiresApproval = true,
                 proposal = proposal
             )
         }
@@ -475,3 +494,4 @@ class CommandParser(
         )
     }
 }
+

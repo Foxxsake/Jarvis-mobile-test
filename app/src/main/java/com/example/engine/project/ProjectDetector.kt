@@ -21,7 +21,7 @@ object ProjectDetector {
 
     val ANDROID_MARKERS = setOf(
         "gradlew", "settings.gradle", "settings.gradle.kts",
-        "build.gradle", "build.gradle.kts", "app"
+        "build.gradle", "build.gradle.kts"
     )
 
     val NODE_MARKERS = setOf(
@@ -70,13 +70,12 @@ object ProjectDetector {
             ProjectType.ANDROID_GRADLE -> {
                 val hasApp = files.contains("app") || files.contains("app/")
                 val hasGradlew = files.contains("gradlew") || files.contains("./gradlew")
-                val cmd = when {
-                    hasGradlew && hasApp -> "./gradlew :app:testDebugUnitTest"
-                    hasGradlew -> "./gradlew testDebugUnitTest"
-                    hasApp -> "gradle :app:testDebugUnitTest"
-                    else -> "gradle test"
+                if (hasGradlew) {
+                    val cmd = if (hasApp) "./gradlew :app:testDebugUnitTest" else "./gradlew testDebugUnitTest"
+                    TestCommandResult.Detected(cmd, "Android Gradle project detected")
+                } else {
+                    TestCommandResult.NotDetected("NO_TEST_COMMAND_DETECTED: Missing gradlew wrapper. Do not assume system gradle.")
                 }
-                TestCommandResult.Detected(cmd, "Android Gradle project detected")
             }
 
             ProjectType.NODE -> {
@@ -94,10 +93,8 @@ object ProjectDetector {
                 val mentionsPytest = requirementsOrPyprojectContent?.contains("pytest", ignoreCase = true) == true
                 if (hasPytestIni || mentionsPytest) {
                     TestCommandResult.Detected("pytest", "Python project configured with pytest")
-                } else if (files.contains("setup.py")) {
-                    TestCommandResult.Detected("python setup.py test", "Python project with setup.py test runner")
                 } else {
-                    TestCommandResult.NotDetected("NO_TEST_COMMAND_DETECTED: Python project detected but no pytest or test configuration found.")
+                    TestCommandResult.NotDetected("NO_TEST_COMMAND_DETECTED: Python project detected but no pytest configuration found.")
                 }
             }
 
@@ -117,13 +114,12 @@ object ProjectDetector {
             ProjectType.ANDROID_GRADLE -> {
                 val hasApp = files.contains("app") || files.contains("app/")
                 val hasGradlew = files.contains("gradlew") || files.contains("./gradlew")
-                val cmd = when {
-                    hasGradlew && hasApp -> "./gradlew :app:assembleDebug"
-                    hasGradlew -> "./gradlew assembleDebug"
-                    hasApp -> "gradle :app:assembleDebug"
-                    else -> "gradle assemble"
+                if (hasGradlew) {
+                    val cmd = if (hasApp) "./gradlew :app:assembleDebug" else "./gradlew assembleDebug"
+                    BuildCommandResult.Detected(cmd, "Android Gradle project detected")
+                } else {
+                    BuildCommandResult.NotDetected("BUILD_COMMAND_NOT_DETECTED: Missing gradlew wrapper.")
                 }
-                BuildCommandResult.Detected(cmd, "Android Gradle project detected")
             }
 
             ProjectType.NODE -> {
@@ -137,11 +133,7 @@ object ProjectDetector {
             }
 
             ProjectType.PYTHON -> {
-                if (files.contains("setup.py")) {
-                    BuildCommandResult.Detected("python setup.py build", "Python project with setup.py")
-                } else {
-                    BuildCommandResult.NotDetected("BUILD_COMMAND_NOT_DETECTED: No build script defined for Python project.")
-                }
+                BuildCommandResult.NotDetected("BUILD_COMMAND_NOT_DETECTED: No build script defined for Python project.")
             }
 
             ProjectType.UNKNOWN -> {
