@@ -479,6 +479,13 @@ class JarvisViewModel(
             settingsManager.setToolEnabled(toolId, enabled)
         }
     }
+
+    fun updateAppPolicy(packageName: String, policy: com.example.data.AccessPolicy) {
+        viewModelScope.launch {
+            toolRegistry.setAppPolicy(packageName, policy)
+            refreshTools()
+        }
+    }
     
     fun refreshTools() {
         toolRegistry.refreshTools()

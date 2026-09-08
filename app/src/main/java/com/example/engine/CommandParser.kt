@@ -450,13 +450,18 @@ class CommandParser(
                 } else {
                     match.result.matchedTerm
                 }
+                val requiresApproval = if (match.result.tool.policy == com.example.data.AccessPolicy.ASK_EACH_TIME) {
+                    true
+                } else {
+                    approvalManager.requiresApproval(CommandAction.OPEN_APP, CommandCategory.DEVICE_ACTION, text)
+                }
                 return PlannedAction(
                     action = CommandAction.OPEN_APP,
                     category = CommandCategory.DEVICE_ACTION,
                     targetAppOrPerson = target,
                     rawArguments = match.result.followUp,
                     followUp = match.result.followUp,
-                    requiresApproval = approvalManager.requiresApproval(CommandAction.OPEN_APP, CommandCategory.DEVICE_ACTION, text)
+                    requiresApproval = requiresApproval
                 )
             } else if (lower.startsWith("open ")) {
                 val target = trimmed.substring(5).trim()
@@ -477,13 +482,18 @@ class CommandParser(
             } else {
                 directMatch.result.matchedTerm
             }
+            val requiresApproval = if (directMatch.result.tool.policy == com.example.data.AccessPolicy.ASK_EACH_TIME) {
+                true
+            } else {
+                approvalManager.requiresApproval(CommandAction.OPEN_APP, CommandCategory.DEVICE_ACTION, text)
+            }
             return PlannedAction(
                 action = CommandAction.OPEN_APP,
                 category = CommandCategory.DEVICE_ACTION,
                 targetAppOrPerson = target,
                 rawArguments = directMatch.result.followUp,
                 followUp = directMatch.result.followUp,
-                requiresApproval = approvalManager.requiresApproval(CommandAction.OPEN_APP, CommandCategory.DEVICE_ACTION, text)
+                requiresApproval = requiresApproval
             )
         }
 

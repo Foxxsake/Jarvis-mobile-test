@@ -93,7 +93,7 @@ class MainActivity : ComponentActivity() {
 
         val repository = ActivityRepository(database.activityLogDao())
         settingsManager = SettingsManager(applicationContext)
-        toolRegistry = ToolRegistry(applicationContext)
+        toolRegistry = ToolRegistry(applicationContext, database.appPolicyDao())
         contactsProvider = AndroidContactsProvider(applicationContext)
         contactResolver = ContactResolver(contactsProvider)
         val termuxWorker = com.example.engine.termux.AndroidTermuxWorker(applicationContext)
@@ -201,6 +201,7 @@ class MainActivity : ComponentActivity() {
                             ToolsScreen(
                                 tools = tools,
                                 onToggleToolEnabled = { id, enabled -> viewModel.toggleToolEnabled(id, enabled) },
+                                onUpdateAppPolicy = { pkg, policy -> viewModel.updateAppPolicy(pkg, policy) },
                                 onRefreshTools = { viewModel.refreshTools() },
                                 onBack = { navController.popBackStack() }
                             )

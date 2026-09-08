@@ -55,7 +55,8 @@ class JarvisEngineTest {
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
-        toolRegistry = ToolRegistry(context)
+        val fakePolicyDao = FakeAppPolicyDao()
+        toolRegistry = ToolRegistry(context, fakePolicyDao)
         fakeContactsProvider = FakeContactsProvider()
         contactResolver = ContactResolver(fakeContactsProvider)
         toolExecutor = ToolExecutor(context, toolRegistry, contactResolver)
@@ -191,6 +192,13 @@ class JarvisEngineTest {
     @Test
     fun `disabled tool exclusion`() = runTest {
         toolRegistry.updateDisabledTools(setOf("pydroid"))
+        
+        var attempt = 0
+        while (toolRegistry.tools.value.find { it.id == "pydroid" }?.enabled == true && attempt < 50) {
+            kotlinx.coroutines.delay(10)
+            attempt++
+        }
+
         val pydroidTool = toolRegistry.findTool("pydroid")
         assertNotNull(pydroidTool)
         assertFalse(pydroidTool!!.enabled)

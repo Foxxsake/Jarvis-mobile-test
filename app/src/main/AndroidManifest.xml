@@ -7,6 +7,10 @@
     <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
 
     <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
         <package android:name="com.termux" />
         <package android:name="com.foxdebug.acodefree" />
         <package android:name="com.foxdebug.acode" />

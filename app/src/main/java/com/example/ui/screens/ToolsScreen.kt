@@ -8,19 +8,21 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.engine.Tool
 import com.example.engine.ToolType
+import com.example.data.AccessPolicy
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ToolsScreen(
     tools: List<Tool>,
     onToggleToolEnabled: (toolId: String, enabled: Boolean) -> Unit,
+    onUpdateAppPolicy: (packageName: String, policy: AccessPolicy) -> Unit,
     onRefreshTools: () -> Unit = {},
     onBack: () -> Unit
 ) {
@@ -79,10 +81,35 @@ fun ToolsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            Switch(
-                                checked = tool.enabled,
-                                onCheckedChange = { onToggleToolEnabled(tool.id, it) }
-                            )
+                            if (tool.source == "DISCOVERED") {
+                                var expanded by remember { mutableStateOf(false) }
+                                Box {
+                                    TextButton(onClick = { expanded = true }) {
+                                        Text(tool.policy.name)
+                                    }
+                                    DropdownMenu(
+                                        expanded = expanded,
+                                        onDismissRequest = { expanded = false }
+                                    ) {
+                                        AccessPolicy.entries.forEach { policy ->
+                                            DropdownMenuItem(
+                                                text = { Text(policy.name) },
+                                                onClick = {
+                                                    tool.installedPackageName?.let { pkg ->
+                                                        onUpdateAppPolicy(pkg, policy)
+                                                    }
+                                                    expanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                Switch(
+                                    checked = tool.enabled,
+                                    onCheckedChange = { onToggleToolEnabled(tool.id, it) }
+                                )
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))
@@ -92,13 +119,18 @@ fun ToolsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             val (statusText, containerColor, contentColor) = when {
+                                tool.source == "DISCOVERED" -> Triple(
+                                    "DISCOVERED APP",
+                                    MaterialTheme.colorScheme.secondaryContainer,
+                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                )
                                 tool.toolType == ToolType.WEB -> Triple(
                                     "WEB TOOL",
                                     MaterialTheme.colorScheme.tertiaryContainer,
                                     MaterialTheme.colorScheme.onTertiaryContainer
                                 )
                                 tool.installedOrAvailable -> Triple(
-                                    "INSTALLED",
+                                    "STANDARD APP",
                                     MaterialTheme.colorScheme.primaryContainer,
                                     MaterialTheme.colorScheme.onPrimaryContainer
                                 )

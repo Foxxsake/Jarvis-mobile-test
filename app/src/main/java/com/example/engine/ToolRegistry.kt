@@ -1,20 +1,39 @@
 package com.example.engine
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
+import com.example.data.AccessPolicy
+import com.example.data.AppPolicy
+import com.example.data.AppPolicyDao
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-class ToolRegistry(private val context: Context) {
-    private val _tools = MutableStateFlow<List<Tool>>(emptyList())
+class ToolRegistry(
+    private val context: Context,
+    private val appPolicyDao: AppPolicyDao,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+) {
+    private val _tools = MutableStateFlow<List<Tool>>(STANDARD_TOOLS)
     val tools: StateFlow<List<Tool>> = _tools.asStateFlow()
 
     private var disabledIds: Set<String> = emptySet()
     private val toolMatcher = ToolCommandMatcher { _tools.value }
+    private val scope = CoroutineScope(ioDispatcher)
 
     init {
-        refreshTools()
+        scope.launch {
+            appPolicyDao.getAllPoliciesFlow().collect { policies ->
+                refreshToolsInternal(policies)
+            }
+        }
     }
 
     fun updateDisabledTools(disabledToolIds: Set<String>) {
@@ -23,24 +42,87 @@ class ToolRegistry(private val context: Context) {
     }
 
     fun refreshTools() {
-        val updatedTools = STANDARD_TOOLS.map { tool ->
-            val isEnabled = !disabledIds.contains(tool.id)
-            if (tool.toolType == ToolType.APP && tool.packageNames.isNotEmpty()) {
-                val detectedPackage = findInstalledPackage(tool.packageNames)
-                tool.copy(
-                    installedOrAvailable = detectedPackage != null,
-                    installedPackageName = detectedPackage,
-                    enabled = isEnabled
-                )
-            } else {
-                tool.copy(enabled = isEnabled)
-            }
+        scope.launch {
+            val policies = appPolicyDao.getAllPolicies()
+            refreshToolsInternal(policies)
         }
-        _tools.value = updatedTools
     }
 
-    private fun findInstalledPackage(packageNames: List<String>): String? {
-        val pm = try { context.packageManager } catch (e: Exception) { null } ?: return null
+    private suspend fun refreshToolsInternal(policies: List<AppPolicy>) = withContext(ioDispatcher) {
+        val policyMap = policies.associateBy { it.packageName }
+        val pm = context.packageManager
+        
+        // Load discovered apps
+        val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+        val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
+        
+        val dynamicTools = mutableMapOf<String, Tool>()
+        for (info in resolveInfos) {
+            val pkg = info.activityInfo.packageName
+            val label = info.loadLabel(pm).toString()
+            val policy = policyMap[pkg]?.policy ?: AccessPolicy.ASK_EACH_TIME
+            
+            // Generate tool ID for discovered apps
+            val toolId = "app:$pkg"
+            val isEnabled = !disabledIds.contains(toolId) && policy != AccessPolicy.BLOCK
+
+            if (!dynamicTools.containsKey(pkg)) {
+                dynamicTools[pkg] = Tool(
+                    id = toolId,
+                    name = label,
+                    description = "Installed Android Application",
+                    capabilities = listOf("app", "launch"),
+                    preferredUses = "Launching $label",
+                    toolType = ToolType.APP,
+                    packageNames = listOf(pkg),
+                    installedPackageName = pkg,
+                    installedOrAvailable = true,
+                    enabled = isEnabled,
+                    policy = policy,
+                    source = "DISCOVERED"
+                )
+            }
+        }
+
+        // Merge with standard tools
+        val mergedTools = STANDARD_TOOLS.map { stdTool ->
+            var isEnabled = !disabledIds.contains(stdTool.id)
+            if (stdTool.toolType == ToolType.APP && stdTool.packageNames.isNotEmpty()) {
+                val detectedPackage = findInstalledPackage(stdTool.packageNames, pm)
+                
+                // If it's installed, use the policy for that package, fallback to ID
+                val pkgPolicy = policyMap[detectedPackage]?.policy ?: policyMap[stdTool.id]?.policy ?: AccessPolicy.ALLOW
+                
+                if (pkgPolicy == AccessPolicy.BLOCK) isEnabled = false
+
+                // Remove from dynamic list to avoid duplicates
+                if (detectedPackage != null) {
+                    dynamicTools.remove(detectedPackage)
+                }
+
+                stdTool.copy(
+                    installedOrAvailable = detectedPackage != null,
+                    installedPackageName = detectedPackage,
+                    enabled = isEnabled,
+                    policy = pkgPolicy,
+                    source = "STANDARD"
+                )
+            } else {
+                val pol = policyMap[stdTool.id]?.policy ?: AccessPolicy.ALLOW
+                val finalEnabled = if (pol == AccessPolicy.BLOCK) false else isEnabled
+                stdTool.copy(enabled = finalEnabled, policy = pol, source = "STANDARD")
+            }
+        }.toMutableList()
+
+        mergedTools.addAll(dynamicTools.values)
+        
+        // Update state
+        _tools.value = mergedTools
+    }
+
+    private fun findInstalledPackage(packageNames: List<String>, pm: PackageManager): String? {
         for (pkg in packageNames) {
             try {
                 pm.getPackageInfo(pkg, 0)
@@ -51,12 +133,15 @@ class ToolRegistry(private val context: Context) {
         return null
     }
 
+    suspend fun setAppPolicy(packageName: String, policy: AccessPolicy) {
+        appPolicyDao.insertPolicy(AppPolicy(packageName, policy))
+    }
+
     fun findTool(query: String): Tool? {
         val clean = query.trim()
         if (clean.isBlank()) return null
 
         val currentList = _tools.value
-        // 1. Try matcher (exact, normalized, conservative fuzzy)
         val outcome = toolMatcher.matchSingleTarget(clean, currentList)
         if (outcome is ToolMatchOutcome.Success) {
             return outcome.result.tool
@@ -68,7 +153,7 @@ class ToolRegistry(private val context: Context) {
     companion object {
         val STANDARD_TOOLS = listOf(
             Tool(
-                id = "github",
+                policy = AccessPolicy.ALLOW, id = "github",
                 name = "GitHub",
                 description = "Repository storage, Version control, Issues/code collaboration",
                 capabilities = listOf("git", "issues", "code review"),
@@ -78,7 +163,7 @@ class ToolRegistry(private val context: Context) {
                 aliases = listOf("github", "gh")
             ),
             Tool(
-                id = "termux",
+                policy = AccessPolicy.ALLOW, id = "termux",
                 name = "Termux",
                 description = "Commands, Git, Node/npm, Build/test, Automation",
                 capabilities = listOf("shell", "cli", "linux"),
@@ -88,7 +173,7 @@ class ToolRegistry(private val context: Context) {
                 aliases = listOf("termux", "terminal", "shell")
             ),
             Tool(
-                id = "acode",
+                policy = AccessPolicy.ALLOW, id = "acode",
                 name = "Acode",
                 description = "Code editing, Project viewing",
                 capabilities = listOf("editor", "text"),
@@ -98,7 +183,7 @@ class ToolRegistry(private val context: Context) {
                 aliases = listOf("acode")
             ),
             Tool(
-                id = "spck",
+                policy = AccessPolicy.ALLOW, id = "spck",
                 name = "SPCK",
                 description = "Code editing",
                 capabilities = listOf("editor", "web"),
@@ -108,7 +193,7 @@ class ToolRegistry(private val context: Context) {
                 aliases = listOf("spck", "spck editor")
             ),
             Tool(
-                id = "code_studio",
+                policy = AccessPolicy.ALLOW, id = "code_studio",
                 name = "Code Studio",
                 description = "Code editing",
                 capabilities = listOf("editor", "ide"),
@@ -118,7 +203,7 @@ class ToolRegistry(private val context: Context) {
                 aliases = listOf("code studio")
             ),
             Tool(
-                id = "pydroid",
+                policy = AccessPolicy.ALLOW, id = "pydroid",
                 name = "Pydroid 3",
                 description = "Python execution",
                 capabilities = listOf("python", "repl"),

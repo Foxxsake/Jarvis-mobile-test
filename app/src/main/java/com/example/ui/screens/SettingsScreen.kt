@@ -25,7 +25,9 @@ enum class SettingsBadgeType {
     LOCKED_ON,
     COMING_LATER,
     NOT_CONNECTED,
-    NOT_IMPLEMENTED
+    NOT_IMPLEMENTED,
+    CONNECTED,
+    WARNING
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -295,17 +297,33 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
             }
 
             // EXTERNAL TOOLS (FUTURE)
-            SettingsSection(title = "EXTERNAL TOOLS (FUTURE)") {
+            SettingsSection(title = "EXTERNAL TOOLS") {
                 SettingsStatusBadgeRow(
                     label = "GitHub connection",
                     badgeText = "NOT CONNECTED",
                     badgeType = SettingsBadgeType.NOT_CONNECTED
                 )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+
+                val termuxText = when (uiState.termuxStatus.connectionState) {
+                    com.example.engine.termux.TermuxConnectionState.READY -> "CONNECTED"
+                    com.example.engine.termux.TermuxConnectionState.SETUP_REQUIRED -> "SETUP REQUIRED"
+                    com.example.engine.termux.TermuxConnectionState.TERMUX_PERMISSION_REQUIRED -> "PERMISSION REQ"
+                    com.example.engine.termux.TermuxConnectionState.TERMUX_NOT_INSTALLED -> "NOT INSTALLED"
+                    else -> "ERROR"
+                }
+                
+                val termuxBadge = when (uiState.termuxStatus.connectionState) {
+                    com.example.engine.termux.TermuxConnectionState.READY -> SettingsBadgeType.CONNECTED
+                    com.example.engine.termux.TermuxConnectionState.SETUP_REQUIRED -> SettingsBadgeType.WARNING
+                    com.example.engine.termux.TermuxConnectionState.TERMUX_PERMISSION_REQUIRED -> SettingsBadgeType.WARNING
+                    else -> SettingsBadgeType.NOT_CONNECTED
+                }
+
                 SettingsStatusBadgeRow(
                     label = "Termux connection",
-                    badgeText = "NOT CONNECTED",
-                    badgeType = SettingsBadgeType.NOT_CONNECTED
+                    badgeText = termuxText,
+                    badgeType = termuxBadge
                 )
             }
         }
@@ -423,6 +441,8 @@ fun SettingsStatusBadgeRow(
         SettingsBadgeType.COMING_LATER -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
         SettingsBadgeType.NOT_CONNECTED -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
         SettingsBadgeType.NOT_IMPLEMENTED -> MaterialTheme.colorScheme.surfaceContainerHighest to MaterialTheme.colorScheme.onSurfaceVariant
+        SettingsBadgeType.CONNECTED -> MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
+        SettingsBadgeType.WARNING -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
     }
 
     Row(

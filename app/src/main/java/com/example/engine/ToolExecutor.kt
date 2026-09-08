@@ -284,6 +284,10 @@ class ToolExecutor(
         val tool = toolRegistry.findTool(targetName)
             ?: return ToolExecutionResult(ToolExecutionStatus.NOT_INSTALLED, "Tool or app '$targetName' is not registered or installed.")
 
+        if (tool.policy == com.example.data.AccessPolicy.BLOCK) {
+            return ToolExecutionResult(ToolExecutionStatus.FAILED, "Cannot open ${tool.name} because it is blocked in JARVIS settings.")
+        }
+
         if (!tool.enabled) {
             return ToolExecutionResult(ToolExecutionStatus.FAILED, "Tool '${tool.name}' is disabled in settings.")
         }
