@@ -148,4 +148,34 @@ class VoiceCoreTest {
         val prompt = JarvisSpeechFormatter.formatApprovalPrompt(plan, "Command: apt update")
         assertTrue(prompt.contains("Terminal command requires approval"))
     }
+
+    @Test
+    fun testHandsFreeModeEnablesAndDisables() {
+        assertFalse(controller.isHandsFreeMode())
+        controller.setHandsFreeMode(true)
+        assertTrue(controller.isHandsFreeMode())
+        controller.setHandsFreeMode(false)
+        assertFalse(controller.isHandsFreeMode())
+    }
+
+    @Test
+    fun testHandsFreeWaitingForApprovalPausesReArming() {
+        controller.setHandsFreeMode(true)
+        controller.onWaitingForApproval("Approval required")
+        assertEquals(VoiceSessionState.SPEAKING, controller.state.value)
+
+        fakeVoiceOutput.finishSpeaking()
+        // Must stay in WAITING_FOR_APPROVAL and not automatically switch back to LISTENING
+        assertEquals(VoiceSessionState.WAITING_FOR_APPROVAL, controller.state.value)
+    }
+
+    @Test
+    fun testFeedbackLoopPreventionStopsListeningDuringSpeech() {
+        controller.handleSpeechState(SpeechState.Listening)
+        assertEquals(VoiceSessionState.LISTENING, controller.state.value)
+
+        controller.speakResponse("Executing command")
+        // Speaking should take precedence and recognizer should be stopped
+        assertEquals(VoiceSessionState.SPEAKING, controller.state.value)
+    }
 }

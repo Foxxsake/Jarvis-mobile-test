@@ -111,8 +111,17 @@ class JarvisViewModel(
     val localProcessingEnabled: StateFlow<Boolean> = settingsManager.localProcessingFlow.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, true)
     val spokenResponsesEnabled: StateFlow<Boolean> = settingsManager.spokenResponsesFlow.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, true)
     val handsFreeEnabled: StateFlow<Boolean> = settingsManager.handsFreeFlow.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, false)
+    val handsFreeServiceState: StateFlow<com.example.engine.voice.handsfree.HandsFreeState> = com.example.engine.voice.handsfree.HandsFreeVoiceService.serviceState
     val activityLogs: StateFlow<List<ActivityLog>> = repository.allLogs.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), emptyList())
     val tools: StateFlow<List<com.example.engine.Tool>> = toolRegistry.tools
+
+    fun startHandsFree(context: android.content.Context) {
+        com.example.engine.voice.handsfree.HandsFreeVoiceService.startService(context)
+    }
+
+    fun stopHandsFree(context: android.content.Context) {
+        com.example.engine.voice.handsfree.HandsFreeVoiceService.stopService(context)
+    }
 
     init {
         refreshTermuxStatus()

@@ -91,6 +91,33 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
 
             // VOICE & CONVERSATION (ACTIVE & FOUNDATIONAL)
             val voiceContext = androidx.compose.ui.platform.LocalContext.current
+            val handsFreeState by viewModel.handsFreeServiceState.collectAsState()
+
+            val permissionsToRequest = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                arrayOf(
+                    android.Manifest.permission.RECORD_AUDIO,
+                    android.Manifest.permission.POST_NOTIFICATIONS
+                )
+            } else {
+                arrayOf(android.Manifest.permission.RECORD_AUDIO)
+            }
+
+            val handsFreePermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+            ) { permissionsMap ->
+                val micGranted = permissionsMap[android.Manifest.permission.RECORD_AUDIO] == true
+                if (micGranted) {
+                    coroutineScope.launch {
+                        viewModel.settingsManager.setHandsFree(true)
+                        viewModel.startHandsFree(voiceContext)
+                    }
+                } else {
+                    coroutineScope.launch {
+                        viewModel.settingsManager.setHandsFree(false)
+                    }
+                }
+            }
+
             SettingsSection(title = "VOICE & CONVERSATION") {
                 SettingsSwitchRow(
                     label = "Spoken responses",
@@ -101,21 +128,68 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                     }
                 )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+                
                 SettingsSwitchRow(
                     label = "Hands-free JARVIS",
                     description = "Enables foreground microphone service for continuous hands-free interaction",
-                    checked = handsFree,
+                    checked = (handsFreeState == com.example.engine.voice.handsfree.HandsFreeState.ACTIVE ||
+                            handsFreeState == com.example.engine.voice.handsfree.HandsFreeState.STARTING ||
+                            handsFree),
                     onCheckedChange = { isChecked ->
-                        coroutineScope.launch {
-                            viewModel.settingsManager.setHandsFree(isChecked)
-                            if (isChecked) {
-                                com.example.engine.voice.handsfree.HandsFreeVoiceService.startService(voiceContext)
+                        if (isChecked) {
+                            val hasAudioPerm = androidx.core.content.ContextCompat.checkSelfPermission(
+                                voiceContext,
+                                android.Manifest.permission.RECORD_AUDIO
+                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                            if (hasAudioPerm) {
+                                coroutineScope.launch {
+                                    viewModel.settingsManager.setHandsFree(true)
+                                    viewModel.startHandsFree(voiceContext)
+                                }
                             } else {
-                                com.example.engine.voice.handsfree.HandsFreeVoiceService.stopService(voiceContext)
+                                handsFreePermissionLauncher.launch(permissionsToRequest)
+                            }
+                        } else {
+                            coroutineScope.launch {
+                                viewModel.settingsManager.setHandsFree(false)
+                                viewModel.stopHandsFree(voiceContext)
                             }
                         }
                     }
                 )
+
+                val (badgeText, badgeType) = when (handsFreeState) {
+                    com.example.engine.voice.handsfree.HandsFreeState.ACTIVE -> "ACTIVE" to SettingsBadgeType.CONNECTED
+                    com.example.engine.voice.handsfree.HandsFreeState.STARTING -> "STARTING" to SettingsBadgeType.CONNECTED
+                    com.example.engine.voice.handsfree.HandsFreeState.PERMISSION_REQUIRED -> "MIC PERMISSION REQUIRED" to SettingsBadgeType.WARNING
+                    com.example.engine.voice.handsfree.HandsFreeState.ERROR -> "SERVICE ERROR" to SettingsBadgeType.WARNING
+                    com.example.engine.voice.handsfree.HandsFreeState.STOPPING -> "STOPPING" to SettingsBadgeType.NOT_CONNECTED
+                    com.example.engine.voice.handsfree.HandsFreeState.OFF -> "OFF" to SettingsBadgeType.NOT_CONNECTED
+                }
+
+                SettingsStatusBadgeRow(
+                    label = "Hands-free status",
+                    badgeText = badgeText,
+                    badgeType = badgeType
+                )
+
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    val hasNotifPerm = androidx.core.content.ContextCompat.checkSelfPermission(
+                        voiceContext,
+                        android.Manifest.permission.POST_NOTIFICATIONS
+                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                    if (!hasNotifPerm && (handsFreeState == com.example.engine.voice.handsfree.HandsFreeState.ACTIVE || handsFree)) {
+                        Text(
+                            text = "Note: Notification permission is not granted. Status notification will not appear in the drawer.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    }
+                }
+
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
                 SettingsStatusBadgeRow(
                     label = "Wake word (Keyword Spotting)",

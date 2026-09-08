@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -16,13 +18,14 @@ sealed class SpeechState {
     object Listening : SpeechState()
     object Processing : SpeechState()
     data class Success(val text: String) : SpeechState()
-    data class Error(val message: String) : SpeechState()
+    data class Error(val message: String, val isTransient: Boolean = false) : SpeechState()
     object PermissionRequired : SpeechState()
     object Unavailable : SpeechState()
 }
 
 class SpeechManager(private val context: Context) {
 
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val _speechState = MutableStateFlow<SpeechState>(SpeechState.Ready)
     val speechState: StateFlow<SpeechState> = _speechState.asStateFlow()
 
@@ -33,79 +36,86 @@ class SpeechManager(private val context: Context) {
     }
 
     fun startListening() {
-        if (!isAvailable()) {
-            _speechState.value = SpeechState.Unavailable
-            return
-        }
-
-        destroyRecognizer()
-
-        try {
-            val recognizer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
-            ) {
-                SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-            } else {
-                SpeechRecognizer.createSpeechRecognizer(context)
+        mainHandler.post {
+            if (!isAvailable()) {
+                _speechState.value = SpeechState.Unavailable
+                return@post
             }
 
-            speechRecognizer = recognizer
+            destroyRecognizerInternal()
 
-            recognizer.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) {
-                    _speechState.value = SpeechState.Listening
+            try {
+                val recognizer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+                ) {
+                    SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+                } else {
+                    SpeechRecognizer.createSpeechRecognizer(context)
                 }
 
-                override fun onBeginningOfSpeech() {
-                    _speechState.value = SpeechState.Listening
-                }
+                speechRecognizer = recognizer
 
-                override fun onRmsChanged(rmsdB: Float) {}
-
-                override fun onBufferReceived(buffer: ByteArray?) {}
-
-                override fun onEndOfSpeech() {
-                    _speechState.value = SpeechState.Processing
-                }
-
-                override fun onError(error: Int) {
-                    val msg = mapSpeechError(error)
-                    _speechState.value = SpeechState.Error(msg)
-                    destroyRecognizer()
-                }
-
-                override fun onResults(results: Bundle?) {
-                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val text = matches?.firstOrNull()?.trim()
-                    if (!text.isNullOrBlank()) {
-                        _speechState.value = SpeechState.Success(text)
-                    } else {
-                        _speechState.value = SpeechState.Error("No speech matched. Please try again.")
+                recognizer.setRecognitionListener(object : RecognitionListener {
+                    override fun onReadyForSpeech(params: Bundle?) {
+                        _speechState.value = SpeechState.Listening
                     }
-                    destroyRecognizer()
+
+                    override fun onBeginningOfSpeech() {
+                        _speechState.value = SpeechState.Listening
+                    }
+
+                    override fun onRmsChanged(rmsdB: Float) {}
+
+                    override fun onBufferReceived(buffer: ByteArray?) {}
+
+                    override fun onEndOfSpeech() {
+                        _speechState.value = SpeechState.Processing
+                    }
+
+                    override fun onError(error: Int) {
+                        val isTransient = (error == SpeechRecognizer.ERROR_NO_MATCH ||
+                                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ||
+                                error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT)
+                        val msg = mapSpeechError(error)
+                        _speechState.value = SpeechState.Error(msg, isTransient = isTransient)
+                        destroyRecognizerInternal()
+                    }
+
+                    override fun onResults(results: Bundle?) {
+                        val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        val text = matches?.firstOrNull()?.trim()
+                        if (!text.isNullOrBlank()) {
+                            _speechState.value = SpeechState.Success(text)
+                        } else {
+                            _speechState.value = SpeechState.Error("No speech matched. Please try again.", isTransient = true)
+                        }
+                        destroyRecognizerInternal()
+                    }
+
+                    override fun onPartialResults(partialResults: Bundle?) {}
+
+                    override fun onEvent(eventType: Int, params: Bundle?) {}
+                })
+
+                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
                 }
 
-                override fun onPartialResults(partialResults: Bundle?) {}
-
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
-
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                recognizer.startListening(intent)
+                _speechState.value = SpeechState.Listening
+            } catch (e: Exception) {
+                _speechState.value = SpeechState.Error("Failed to initialize speech input: ${e.message}")
             }
-
-            recognizer.startListening(intent)
-            _speechState.value = SpeechState.Listening
-        } catch (e: Exception) {
-            _speechState.value = SpeechState.Error("Failed to initialize speech input: ${e.message}")
         }
     }
 
     fun stopListening() {
-        try {
-            speechRecognizer?.stopListening()
-        } catch (_: Exception) {}
+        mainHandler.post {
+            try {
+                speechRecognizer?.stopListening()
+            } catch (_: Exception) {}
+        }
     }
 
     fun resetState() {
@@ -113,6 +123,12 @@ class SpeechManager(private val context: Context) {
     }
 
     fun destroyRecognizer() {
+        mainHandler.post {
+            destroyRecognizerInternal()
+        }
+    }
+
+    private fun destroyRecognizerInternal() {
         try {
             speechRecognizer?.destroy()
         } catch (_: Exception) {}

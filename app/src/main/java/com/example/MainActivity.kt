@@ -90,24 +90,18 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        database = AppDatabase.getDatabase(applicationContext)
-
-        val repository = ActivityRepository(database.activityLogDao())
-        settingsManager = SettingsManager(applicationContext)
-        toolRegistry = ToolRegistry(applicationContext, database.appPolicyDao())
-        contactsProvider = AndroidContactsProvider(applicationContext)
-        contactResolver = ContactResolver(contactsProvider)
-        val termuxWorker = com.example.engine.termux.AndroidTermuxWorker(applicationContext)
-        val workspaceRegistry = com.example.data.workspace.LocalWorkspaceRegistry(applicationContext)
-        toolExecutor = ToolExecutor(
-            context = applicationContext,
-            toolRegistry = toolRegistry,
-            contactResolver = contactResolver,
-            termuxWorker = termuxWorker,
-            workspaceRegistry = workspaceRegistry
-        )
-        speechManager = SpeechManager(applicationContext)
-        voiceOutput = com.example.engine.voice.AndroidVoiceOutput(applicationContext)
+        val runtime = com.example.engine.JarvisRuntime.getInstance(applicationContext)
+        database = runtime.database
+        settingsManager = runtime.settingsManager
+        toolRegistry = runtime.toolRegistry
+        contactsProvider = runtime.contactsProvider
+        contactResolver = runtime.contactResolver
+        speechManager = runtime.speechManager
+        voiceOutput = runtime.voiceOutput as com.example.engine.voice.AndroidVoiceOutput
+        val repository = runtime.activityRepository
+        val termuxWorker = runtime.termuxWorker
+        val workspaceRegistry = runtime.workspaceRegistry
+        toolExecutor = runtime.toolExecutor
 
         setContent {
             JARVISTheme {

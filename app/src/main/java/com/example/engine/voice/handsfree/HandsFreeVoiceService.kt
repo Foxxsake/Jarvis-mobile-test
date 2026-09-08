@@ -1,5 +1,6 @@
 package com.example.engine.voice.handsfree
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,21 +8,34 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.example.MainActivity
+import com.example.engine.JarvisRuntime
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Foreground Service for keeping an explicitly user-enabled hands-free voice session active.
  * Complies with Android 14+ (API 34) microphone foreground service requirements:
  * - Declares foregroundServiceType="microphone" in manifest
  * - Requires explicit RECORD_AUDIO and FOREGROUND_SERVICE_MICROPHONE permissions
- * - Shows a persistent, user-visible notification with a clear "Stop" action
+ * - Shows a persistent, user-visible notification with a clear "Stop Listening" action
  * - Never starts silently or on device boot
+ * - Routes all spoken commands through the unified JarvisRuntime command execution pipeline
  */
 class HandsFreeVoiceService : Service() {
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     companion object {
         const val CHANNEL_ID = "jarvis_hands_free_channel"
@@ -29,22 +43,45 @@ class HandsFreeVoiceService : Service() {
         const val ACTION_START = "com.example.action.START_HANDS_FREE"
         const val ACTION_STOP = "com.example.action.STOP_HANDS_FREE"
 
+        private val _serviceState = MutableStateFlow<HandsFreeState>(HandsFreeState.OFF)
+        val serviceState: StateFlow<HandsFreeState> = _serviceState.asStateFlow()
+
         fun startService(context: Context) {
+            val hasMicPerm = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (!hasMicPerm) {
+                _serviceState.value = HandsFreeState.PERMISSION_REQUIRED
+                return
+            }
+
+            _serviceState.value = HandsFreeState.STARTING
             val intent = Intent(context, HandsFreeVoiceService::class.java).apply {
                 action = ACTION_START
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                _serviceState.value = HandsFreeState.ERROR
             }
         }
 
         fun stopService(context: Context) {
+            _serviceState.value = HandsFreeState.STOPPING
             val intent = Intent(context, HandsFreeVoiceService::class.java).apply {
                 action = ACTION_STOP
             }
-            context.startService(intent)
+            try {
+                context.startService(intent)
+            } catch (e: Exception) {
+                _serviceState.value = HandsFreeState.OFF
+            }
         }
     }
 
@@ -58,28 +95,91 @@ class HandsFreeVoiceService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                handleStop()
                 return START_NOT_STICKY
             }
             ACTION_START, null -> {
-                val notification = buildNotification()
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        startForeground(
-                            NOTIFICATION_ID,
-                            notification,
-                            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                        )
-                    } else {
-                        startForeground(NOTIFICATION_ID, notification)
-                    }
-                } else {
-                    startForeground(NOTIFICATION_ID, notification)
-                }
+                handleStart()
             }
         }
         return START_NOT_STICKY
+    }
+
+    private fun handleStart() {
+        val hasMicPerm = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!hasMicPerm) {
+            _serviceState.value = HandsFreeState.PERMISSION_REQUIRED
+            stopSelf()
+            return
+        }
+
+        try {
+            val notification = buildNotification()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    )
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+
+            _serviceState.value = HandsFreeState.ACTIVE
+
+            // Connect to shared JarvisRuntime and start continuous listening
+            val runtime = JarvisRuntime.getInstance(applicationContext)
+            runtime.voiceSessionController.setHandsFreeMode(true)
+            runtime.voiceSessionController.startListening()
+
+        } catch (e: Exception) {
+            _serviceState.value = HandsFreeState.ERROR
+            stopSelf()
+        }
+    }
+
+    private fun handleStop() {
+        try {
+            val runtime = JarvisRuntime.getInstance(applicationContext)
+            runtime.voiceSessionController.setHandsFreeMode(false)
+            runtime.voiceSessionController.stopListening()
+            runtime.voiceSessionController.stopSpeaking()
+
+            serviceScope.launch {
+                runtime.settingsManager.setHandsFree(false)
+            }
+        } catch (_: Exception) {}
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+        _serviceState.value = HandsFreeState.OFF
+        stopSelf()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            val runtime = JarvisRuntime.getInstance(applicationContext)
+            runtime.voiceSessionController.setHandsFreeMode(false)
+        } catch (_: Exception) {}
+
+        if (_serviceState.value != HandsFreeState.PERMISSION_REQUIRED &&
+            _serviceState.value != HandsFreeState.ERROR
+        ) {
+            _serviceState.value = HandsFreeState.OFF
+        }
     }
 
     private fun createNotificationChannel() {
