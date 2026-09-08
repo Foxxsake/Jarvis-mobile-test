@@ -21,6 +21,19 @@ import com.example.engine.ToolRegistry
 import com.example.engine.ToolCommandMatcher
 import com.example.engine.speech.SpeechManager
 import com.example.engine.speech.SpeechState
+import com.example.engine.voice.JarvisSpeechFormatter
+import com.example.engine.voice.JarvisVoiceOutput
+import com.example.engine.voice.VoiceOutputState
+import com.example.engine.voice.VoiceSessionController
+import com.example.engine.voice.VoiceSessionListener
+import com.example.engine.voice.VoiceSessionState
+import com.example.engine.voice.handsfree.HandsFreeVoiceService
+import com.example.engine.voice.speaker.LocalSpeakerVerifier
+import com.example.engine.voice.speaker.SpeakerEnrollmentState
+import com.example.engine.voice.speaker.SpeakerVerifier
+import com.example.engine.voice.wakeword.SherpaWakeWordEngine
+import com.example.engine.voice.wakeword.WakeWordEngine
+import com.example.engine.voice.wakeword.WakeWordEngineStatus
 import com.example.util.PrivacyUtils
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +45,8 @@ import kotlinx.coroutines.launch
 data class JarvisUiState(
     val status: String = "Ready",
     val isListening: Boolean = false,
+    val voiceSessionState: VoiceSessionState = VoiceSessionState.IDLE,
+    val voiceOutputState: VoiceOutputState = VoiceOutputState.Idle,
     val lastRecognizedText: String = "",
     val speechEventId: Long = 0L,
     val pendingApproval: CommandPlan? = null,
@@ -47,6 +62,8 @@ data class JarvisUiState(
     val ambiguousAppCandidates: List<com.example.engine.Tool>? = null,
     val permissionRationaleNeeded: String? = null,
     val permissionPermanentlyDenied: String? = null,
+    val wakeWordStatus: WakeWordEngineStatus = WakeWordEngineStatus.DISABLED,
+    val speakerEnrollmentState: SpeakerEnrollmentState = SpeakerEnrollmentState.NOT_ENROLLED,
     val termuxStatus: com.example.engine.termux.TermuxConnectionStatus = com.example.engine.termux.TermuxConnectionStatus(
         isInstalled = false,
         isPermissionGranted = false,
@@ -64,6 +81,9 @@ class JarvisViewModel(
     private val toolExecutor: ToolExecutor,
     private val contactResolver: ContactResolver,
     val settingsManager: SettingsManager,
+    val voiceOutput: JarvisVoiceOutput? = null,
+    val wakeWordEngine: WakeWordEngine = SherpaWakeWordEngine(),
+    val speakerVerifier: SpeakerVerifier = LocalSpeakerVerifier(),
     val termuxWorker: com.example.engine.termux.TermuxWorker = com.example.engine.termux.FakeTermuxWorker(),
     val workspaceRegistry: com.example.data.workspace.WorkspaceRegistry = com.example.data.workspace.LocalWorkspaceRegistry()
 ) : ViewModel() {
@@ -71,55 +91,98 @@ class JarvisViewModel(
     private val _uiState = MutableStateFlow(JarvisUiState())
     val uiState: StateFlow<JarvisUiState> = _uiState.asStateFlow()
 
+    private val fallbackVoiceOutput: JarvisVoiceOutput = voiceOutput ?: object : JarvisVoiceOutput {
+        private val _st = MutableStateFlow<VoiceOutputState>(VoiceOutputState.Idle)
+        override val state: StateFlow<VoiceOutputState> = _st
+        override fun isAvailable(): Boolean = false
+        override fun speak(text: String, onDone: (() -> Unit)?) { onDone?.invoke() }
+        override fun stop() {}
+        override fun shutdown() {}
+    }
+
+    val voiceSessionController = VoiceSessionController(
+        speechManager = speechManager,
+        voiceOutput = fallbackVoiceOutput
+    )
+
     private val parser = CommandParser(toolMatcher = ToolCommandMatcher { toolRegistry.tools.value })
     private val taskRouter = TaskRouter(toolRegistry)
 
     val localProcessingEnabled: StateFlow<Boolean> = settingsManager.localProcessingFlow.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, true)
+    val spokenResponsesEnabled: StateFlow<Boolean> = settingsManager.spokenResponsesFlow.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, true)
+    val handsFreeEnabled: StateFlow<Boolean> = settingsManager.handsFreeFlow.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, false)
     val activityLogs: StateFlow<List<ActivityLog>> = repository.allLogs.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), emptyList())
     val tools: StateFlow<List<com.example.engine.Tool>> = toolRegistry.tools
 
     init {
         refreshTermuxStatus()
         refreshActiveWorkspace()
+
+        // Sync spoken responses preference with session controller
+        viewModelScope.launch {
+            spokenResponsesEnabled.collectLatest { enabled ->
+                voiceSessionController.setSpokenResponsesEnabled(enabled)
+            }
+        }
+
+        // Sync voice output state to UI
+        viewModelScope.launch {
+            fallbackVoiceOutput.state.collectLatest { vState ->
+                _uiState.value = _uiState.value.copy(
+                    voiceOutputState = vState,
+                    status = if (vState is VoiceOutputState.Speaking) "Speaking..." else _uiState.value.status
+                )
+            }
+        }
+
+        // Sync wake-word and speaker verification status
+        viewModelScope.launch {
+            wakeWordEngine.status.collectLatest { wwStatus ->
+                _uiState.value = _uiState.value.copy(wakeWordStatus = wwStatus)
+            }
+        }
+        viewModelScope.launch {
+            speakerVerifier.enrollmentState.collectLatest { spkState ->
+                _uiState.value = _uiState.value.copy(speakerEnrollmentState = spkState)
+            }
+        }
+
+        // Listen for voice session state changes
+        voiceSessionController.setListener(object : VoiceSessionListener {
+            override fun onStateChanged(state: VoiceSessionState) {
+                val statusText = when (state) {
+                    VoiceSessionState.IDLE -> if (_uiState.value.status.startsWith("Error")) _uiState.value.status else "Ready"
+                    VoiceSessionState.LISTENING -> "Listening..."
+                    VoiceSessionState.TRANSCRIBING -> "Processing speech..."
+                    VoiceSessionState.PROCESSING -> "Processing..."
+                    VoiceSessionState.WAITING_FOR_APPROVAL -> "Waiting for approval"
+                    VoiceSessionState.SPEAKING -> "Speaking..."
+                    VoiceSessionState.ERROR -> _uiState.value.status
+                }
+                _uiState.value = _uiState.value.copy(
+                    voiceSessionState = state,
+                    isListening = (state == VoiceSessionState.LISTENING),
+                    status = statusText
+                )
+            }
+
+            override fun onSpeechRecognized(text: String) {
+                _uiState.value = _uiState.value.copy(
+                    lastRecognizedText = text,
+                    speechEventId = _uiState.value.speechEventId + 1
+                )
+                submitCommand(text)
+            }
+
+            override fun onError(message: String) {
+                _uiState.value = _uiState.value.copy(status = "Error: $message")
+            }
+        })
+
+        // Forward raw speech state into voiceSessionController
         viewModelScope.launch {
             speechManager.speechState.collectLatest { state ->
-                when (state) {
-                    is SpeechState.Ready -> _uiState.value = _uiState.value.copy(isListening = false)
-                    is SpeechState.Listening -> _uiState.value = _uiState.value.copy(isListening = true, status = "Listening...")
-                    is SpeechState.Success -> {
-                        _uiState.value = _uiState.value.copy(
-                            isListening = false,
-                            lastRecognizedText = state.text,
-                            speechEventId = _uiState.value.speechEventId + 1,
-                            status = "Ready"
-                        )
-                        submitCommand(state.text)
-                    }
-                    is SpeechState.Error -> { 
-                        _uiState.value = _uiState.value.copy( 
-                            isListening = false, 
-                            status = "Error: ${state.message}" 
-                        ) 
-                    } 
-                    is SpeechState.PermissionRequired -> { 
-                        _uiState.value = _uiState.value.copy( 
-                            isListening = false, 
-                            status = "Microphone permission required" 
-                        ) 
-                    } 
-                    is SpeechState.Unavailable -> { 
-                        _uiState.value = _uiState.value.copy( 
-                            isListening = false, 
-                            status = "Speech recognition unavailable" 
-                        ) 
-                    } 
-                    is SpeechState.Processing -> { 
-                        _uiState.value = _uiState.value.copy( 
-                            isListening = false, 
-                            status = "Processing speech..." 
-                        ) 
-                    }
-                }
+                voiceSessionController.handleSpeechState(state)
             }
         }
     }
@@ -162,10 +225,12 @@ class JarvisViewModel(
                     permissionRationaleNeeded = "CONTACTS",
                     pendingApproval = plan
                 )
+                voiceSessionController.speakResponse("Contacts permission is required.")
             }
             is ContactResolutionResult.ProviderError -> {
                 logActivity(plan.originalText, plan.actions.first(), "Contact lookup", ToolExecutionStatus.FAILED.name, resolution.message)
                 _uiState.value = _uiState.value.copy(status = "Contacts provider error")
+                voiceSessionController.speakResponse("Sorry, there was an error accessing contacts.")
             }
             is ContactResolutionResult.Ambiguous -> {
                 _uiState.value = _uiState.value.copy(
@@ -175,6 +240,7 @@ class JarvisViewModel(
                     ambiguousCandidates = resolution.candidates,
                     pendingMessageForDestination = resolution.message
                 )
+                voiceSessionController.speakResponse("Multiple matching contacts found. Please select on screen.")
             }
             is ContactResolutionResult.MultipleDestinations -> {
                 _uiState.value = _uiState.value.copy(
@@ -184,10 +250,12 @@ class JarvisViewModel(
                     multipleDestinations = resolution.destinations,
                     pendingMessageForDestination = resolution.message
                 )
+                voiceSessionController.speakResponse("Multiple numbers or addresses found. Please choose on screen.")
             }
             is ContactResolutionResult.NotFound -> {
                 logActivity(plan.originalText, plan.actions.first(), "Contact lookup", ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED.name, "Contact not found.")
                 _uiState.value = _uiState.value.copy(status = "Contact not found")
+                voiceSessionController.speakResponse("I couldn't find that contact.")
             }
             is ContactResolutionResult.Resolved -> {
                 val executionPlan = taskRouter.route(plan)
@@ -205,10 +273,13 @@ class JarvisViewModel(
                     planToApprove = approvalDetail,
                     resolvedContact = resolution
                 )
+                val promptText = JarvisSpeechFormatter.formatApprovalPrompt(plan, approvalDetail)
+                voiceSessionController.onWaitingForApproval(promptText)
             }
             ContactResolutionResult.ResolutionRequired -> {
                 logActivity(plan.originalText, plan.actions.first(), "Contact lookup", ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED.name, "Contact name or target missing.")
                 _uiState.value = _uiState.value.copy(status = "Contact details missing")
+                voiceSessionController.speakResponse("Contact name is missing.")
             }
         }
     }
@@ -346,6 +417,8 @@ class JarvisViewModel(
             result.message
         )
         _uiState.value = _uiState.value.copy(status = "Ready")
+        val spokenText = JarvisSpeechFormatter.formatExecutionResult(plan.originalText, result)
+        voiceSessionController.speakResponse(spokenText)
     }
 
     private suspend fun executePlan(
@@ -393,6 +466,8 @@ class JarvisViewModel(
                     pendingActionIndex = i,
                     planToApprove = details
                 )
+                val approvalPrompt = JarvisSpeechFormatter.formatApprovalPrompt(currentPlan, details)
+                voiceSessionController.onWaitingForApproval(approvalPrompt)
                 return // Pause execution until user approves or rejects this specific action
             }
 
@@ -404,6 +479,14 @@ class JarvisViewModel(
                     ToolExecutionStatus.NOT_IMPLEMENTED.name,
                     "Command not recognized locally. Requires AI engine."
                 )
+                val unknownSpoken = JarvisSpeechFormatter.formatExecutionResult(
+                    currentPlan.originalText,
+                    com.example.engine.ToolExecutionResult(
+                        ToolExecutionStatus.NOT_IMPLEMENTED,
+                        "Command not recognized locally. Requires AI engine."
+                    )
+                )
+                voiceSessionController.speakResponse(unknownSpoken)
                 if (!currentPlan.continueOnFailure) {
                     skipRemainingActions(currentPlan, i + 1, "Unrecognized command")
                     _uiState.value = _uiState.value.copy(status = "Plan stopped: Unrecognized command")
@@ -434,6 +517,8 @@ class JarvisViewModel(
                     ambiguousAppQuery = action.targetAppOrPerson,
                     ambiguousAppCandidates = result.candidateTools
                 )
+                val spoken = JarvisSpeechFormatter.formatExecutionResult(currentPlan.originalText, result)
+                voiceSessionController.speakResponse(spoken)
                 return
             }
 
@@ -441,7 +526,15 @@ class JarvisViewModel(
             if (!isSuccess && !currentPlan.continueOnFailure) {
                 skipRemainingActions(currentPlan, i + 1, "Previous action '${action.action.name}' failed (${result.status.name})")
                 _uiState.value = _uiState.value.copy(status = "Plan stopped: Action ${i + 1} failed")
+                val spoken = JarvisSpeechFormatter.formatExecutionResult(currentPlan.originalText, result)
+                voiceSessionController.speakResponse(spoken)
                 return
+            }
+
+            // If this is the last action or single action in the plan, speak result
+            if (i == currentPlan.actions.size - 1) {
+                val spoken = JarvisSpeechFormatter.formatExecutionResult(currentPlan.originalText, result)
+                voiceSessionController.speakResponse(spoken)
             }
         }
 
@@ -606,6 +699,6 @@ class JarvisViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        speechManager.destroyRecognizer()
+        voiceSessionController.shutdown()
     }
 }

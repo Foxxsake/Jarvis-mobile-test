@@ -19,7 +19,19 @@ class SettingsManager(private val context: Context) {
         val LOCAL_PROCESSING = booleanPreferencesKey("local_processing")
         val DISABLED_TOOL_IDS = stringSetPreferencesKey("disabled_tool_ids")
         val AI_MODE = stringPreferencesKey("ai_mode")
+        val SPOKEN_RESPONSES = booleanPreferencesKey("spoken_responses")
+        val HANDS_FREE = booleanPreferencesKey("hands_free")
     }
+
+    val spokenResponsesFlow: Flow<Boolean> = context.dataStore.data
+        .map { preferences ->
+            preferences[SPOKEN_RESPONSES] ?: true // Default ON for development testing
+        }
+
+    val handsFreeFlow: Flow<Boolean> = context.dataStore.data
+        .map { preferences ->
+            preferences[HANDS_FREE] ?: false // Default OFF
+        }
 
     val confirmationRequiredFlow: Flow<Boolean> = context.dataStore.data
         .map { preferences ->
@@ -50,6 +62,18 @@ class SettingsManager(private val context: Context) {
     suspend fun setLocalProcessing(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[LOCAL_PROCESSING] = enabled
+        }
+    }
+
+    suspend fun setSpokenResponses(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[SPOKEN_RESPONSES] = enabled
+        }
+    }
+
+    suspend fun setHandsFree(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[HANDS_FREE] = enabled
         }
     }
 

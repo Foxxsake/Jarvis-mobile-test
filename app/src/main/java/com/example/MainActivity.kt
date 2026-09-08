@@ -44,6 +44,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var contactsProvider: AndroidContactsProvider
     private lateinit var contactResolver: ContactResolver
     private lateinit var speechManager: SpeechManager
+    private lateinit var voiceOutput: com.example.engine.voice.AndroidVoiceOutput
 
     private var activeViewModel: JarvisViewModel? = null
     private var hasRequestedMicPermission = false
@@ -106,6 +107,7 @@ class MainActivity : ComponentActivity() {
             workspaceRegistry = workspaceRegistry
         )
         speechManager = SpeechManager(applicationContext)
+        voiceOutput = com.example.engine.voice.AndroidVoiceOutput(applicationContext)
 
         setContent {
             JARVISTheme {
@@ -125,6 +127,7 @@ class MainActivity : ComponentActivity() {
                                     toolExecutor = toolExecutor,
                                     contactResolver = contactResolver,
                                     speechManager = speechManager,
+                                    voiceOutput = voiceOutput,
                                     termuxWorker = termuxWorker,
                                     workspaceRegistry = workspaceRegistry
                                 ) as T
@@ -223,5 +226,8 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         speechManager.destroyRecognizer()
+        if (::voiceOutput.isInitialized) {
+            voiceOutput.shutdown()
+        }
     }
 }

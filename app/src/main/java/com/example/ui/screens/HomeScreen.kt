@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Home
@@ -148,11 +149,14 @@ fun HomeScreen(
                         style = MaterialTheme.typography.labelSmall
                     )
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
-                        val statusColor = when (uiState.status) {
-                            "Ready" -> MaterialTheme.colorScheme.primary
-                            "Listening" -> MaterialTheme.colorScheme.secondary
-                            "Processing speech", "Planning" -> MaterialTheme.colorScheme.tertiary
-                            else -> MaterialTheme.colorScheme.error
+                        val statusColor = when (uiState.voiceSessionState) {
+                            com.example.engine.voice.VoiceSessionState.IDLE -> MaterialTheme.colorScheme.primary
+                            com.example.engine.voice.VoiceSessionState.LISTENING -> MaterialTheme.colorScheme.secondary
+                            com.example.engine.voice.VoiceSessionState.TRANSCRIBING,
+                            com.example.engine.voice.VoiceSessionState.PROCESSING -> MaterialTheme.colorScheme.tertiary
+                            com.example.engine.voice.VoiceSessionState.SPEAKING -> MaterialTheme.colorScheme.secondary
+                            com.example.engine.voice.VoiceSessionState.WAITING_FOR_APPROVAL -> MaterialTheme.colorScheme.tertiary
+                            com.example.engine.voice.VoiceSessionState.ERROR -> MaterialTheme.colorScheme.error
                         }
                         Box(
                             modifier = Modifier
@@ -456,13 +460,14 @@ fun HomeScreen(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp, top = 16.dp)
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(bottom = 16.dp)) {
-                    val isListening = uiState.status == "Listening"
+                    val isListening = uiState.isListening || uiState.voiceSessionState == com.example.engine.voice.VoiceSessionState.LISTENING
+                    val isSpeaking = uiState.voiceSessionState == com.example.engine.voice.VoiceSessionState.SPEAKING
                     Box(
                         modifier = Modifier
                             .size(100.dp)
                             .blur(24.dp)
                             .background(
-                                if (isListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                                if (isListening) MaterialTheme.colorScheme.primary else if (isSpeaking) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
                                 CircleShape
                             )
                     )
@@ -471,10 +476,10 @@ fun HomeScreen(
                             .size(80.dp)
                             .clickable { onMicClick() },
                         shape = CircleShape,
-                        color = if (isListening) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.background,
+                        color = if (isListening) MaterialTheme.colorScheme.primaryContainer else if (isSpeaking) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.background,
                         border = BorderStroke(
                             2.dp,
-                            if (isListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                            if (isListening) MaterialTheme.colorScheme.primary else if (isSpeaking) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
                         )
                     ) {
                         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
@@ -482,23 +487,28 @@ fun HomeScreen(
                                 modifier = Modifier
                                     .size(56.dp)
                                     .background(
-                                        if (isListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                                        if (isListening) MaterialTheme.colorScheme.primary else if (isSpeaking) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.surfaceVariant,
                                         CircleShape
                                     ),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Mic,
-                                    contentDescription = "Tap to speak",
+                                    imageVector = if (isSpeaking) Icons.AutoMirrored.Filled.VolumeUp else Icons.Default.Mic,
+                                    contentDescription = if (isSpeaking) "JARVIS speaking" else "Tap to speak",
                                     modifier = Modifier.size(24.dp),
-                                    tint = if (isListening) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    tint = if (isListening) MaterialTheme.colorScheme.onPrimary else if (isSpeaking) MaterialTheme.colorScheme.onSecondary else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
                     }
                 }
                 Text(
-                    text = if (uiState.status == "Listening") "Listening..." else "Tap mic for push-to-talk voice input",
+                    text = when {
+                        uiState.voiceSessionState == com.example.engine.voice.VoiceSessionState.LISTENING -> "Listening..."
+                        uiState.voiceSessionState == com.example.engine.voice.VoiceSessionState.TRANSCRIBING -> "Transcribing..."
+                        uiState.voiceSessionState == com.example.engine.voice.VoiceSessionState.SPEAKING -> "Speaking response..."
+                        else -> "Tap mic for push-to-talk voice input"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.padding(bottom = 16.dp)

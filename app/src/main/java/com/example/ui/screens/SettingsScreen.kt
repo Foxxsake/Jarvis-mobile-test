@@ -35,6 +35,8 @@ enum class SettingsBadgeType {
 fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
     val coroutineScope = rememberCoroutineScope()
     val localProcessing by viewModel.localProcessingEnabled.collectAsState()
+    val spokenResponses by viewModel.spokenResponsesEnabled.collectAsState()
+    val handsFree by viewModel.handsFreeEnabled.collectAsState()
 
     Scaffold(
         topBar = {
@@ -84,6 +86,47 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                     label = "Token / quota tracking",
                     badgeText = "NOT IMPLEMENTED",
                     badgeType = SettingsBadgeType.NOT_IMPLEMENTED
+                )
+            }
+
+            // VOICE & CONVERSATION (ACTIVE & FOUNDATIONAL)
+            val voiceContext = androidx.compose.ui.platform.LocalContext.current
+            SettingsSection(title = "VOICE & CONVERSATION") {
+                SettingsSwitchRow(
+                    label = "Spoken responses",
+                    description = "JARVIS speaks command results and approval questions aloud",
+                    checked = spokenResponses,
+                    onCheckedChange = {
+                        coroutineScope.launch { viewModel.settingsManager.setSpokenResponses(it) }
+                    }
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+                SettingsSwitchRow(
+                    label = "Hands-free JARVIS",
+                    description = "Enables foreground microphone service for continuous hands-free interaction",
+                    checked = handsFree,
+                    onCheckedChange = { isChecked ->
+                        coroutineScope.launch {
+                            viewModel.settingsManager.setHandsFree(isChecked)
+                            if (isChecked) {
+                                com.example.engine.voice.handsfree.HandsFreeVoiceService.startService(voiceContext)
+                            } else {
+                                com.example.engine.voice.handsfree.HandsFreeVoiceService.stopService(voiceContext)
+                            }
+                        }
+                    }
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+                SettingsStatusBadgeRow(
+                    label = "Wake word (Keyword Spotting)",
+                    badgeText = "DISABLED (PASS 5B)",
+                    badgeType = SettingsBadgeType.NOT_CONNECTED
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+                SettingsStatusBadgeRow(
+                    label = "Owner Voice Lock",
+                    badgeText = "NOT ENROLLED",
+                    badgeType = SettingsBadgeType.NOT_CONNECTED
                 )
             }
 
@@ -278,19 +321,13 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
             // SYSTEM INTEGRATION (FUTURE)
             SettingsSection(title = "SYSTEM INTEGRATION (FUTURE)") {
                 SettingsStatusBadgeRow(
-                    label = "Wake word detection",
+                    label = "System overlay assistant",
                     badgeText = "COMING LATER",
                     badgeType = SettingsBadgeType.COMING_LATER
                 )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
                 SettingsStatusBadgeRow(
-                    label = "Background assistant",
-                    badgeText = "COMING LATER",
-                    badgeType = SettingsBadgeType.COMING_LATER
-                )
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
-                SettingsStatusBadgeRow(
-                    label = "Accessibility integration",
+                    label = "Accessibility automation",
                     badgeText = "COMING LATER",
                     badgeType = SettingsBadgeType.COMING_LATER
                 )
