@@ -40,7 +40,8 @@ class ToolExecutor(
     suspend fun executeAction(
         command: PlannedAction,
         resolvedResult: ContactResolutionResult? = null,
-        isLocalProcessingEnabled: Boolean = true
+        isLocalProcessingEnabled: Boolean = true,
+        authorization: com.example.engine.policy.ExecutionAuthorization = com.example.engine.policy.ExecutionAuthorization.untrusted()
     ): ToolExecutionResult {
         if (!isLocalProcessingEnabled) {
             return ToolExecutionResult(
@@ -52,10 +53,21 @@ class ToolExecutor(
         val policyDecision = com.example.engine.policy.ExecutionPolicyGuard.evaluate(
             action = command,
             toolRegistry = toolRegistry,
-            isApprovedByUser = true
+            isApprovedByUser = authorization.isApprovedByUser
         )
-        if (policyDecision is com.example.engine.policy.PolicyDecision.Blocked) {
-            return ToolExecutionResult(ToolExecutionStatus.FAILED, policyDecision.reason)
+        when (policyDecision) {
+            is com.example.engine.policy.PolicyDecision.Blocked -> {
+                return ToolExecutionResult(ToolExecutionStatus.FAILED, policyDecision.reason)
+            }
+            is com.example.engine.policy.PolicyDecision.RequiresApproval -> {
+                return ToolExecutionResult(
+                    ToolExecutionStatus.COMMAND_REJECTED,
+                    "Execution blocked: ${policyDecision.reason} Explicit user approval required."
+                )
+            }
+            is com.example.engine.policy.PolicyDecision.Allowed -> {
+                // Allowed to execute
+            }
         }
 
         return when (command.action) {

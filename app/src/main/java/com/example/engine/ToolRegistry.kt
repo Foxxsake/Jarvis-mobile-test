@@ -38,6 +38,10 @@ class ToolRegistry(
 
     fun updateDisabledTools(disabledToolIds: Set<String>) {
         this.disabledIds = disabledToolIds
+        _tools.value = _tools.value.map { tool ->
+            val isEnabled = !disabledIds.contains(tool.id) && tool.policy != AccessPolicy.BLOCK
+            tool.copy(enabled = isEnabled)
+        }
         refreshTools()
     }
 
@@ -135,6 +139,11 @@ class ToolRegistry(
 
     suspend fun setAppPolicy(packageName: String, policy: AccessPolicy) {
         appPolicyDao.insertPolicy(AppPolicy(packageName, policy))
+        _tools.value = _tools.value.map { t ->
+            if (t.packageNames.contains(packageName) || t.installedPackageName == packageName) {
+                t.copy(policy = policy, enabled = policy != AccessPolicy.BLOCK && !disabledIds.contains(t.id))
+            } else t
+        }
     }
 
     suspend fun setToolPolicy(tool: Tool, policy: AccessPolicy) {
@@ -147,6 +156,11 @@ class ToolRegistry(
         // Persist policy by declared package names
         for (pkg in tool.packageNames) {
             appPolicyDao.insertPolicy(AppPolicy(pkg, policy))
+        }
+        _tools.value = _tools.value.map { t ->
+            if (t.id == tool.id || (tool.installedPackageName != null && t.installedPackageName == tool.installedPackageName)) {
+                t.copy(policy = policy, enabled = policy != AccessPolicy.BLOCK && !disabledIds.contains(t.id))
+            } else t
         }
     }
 

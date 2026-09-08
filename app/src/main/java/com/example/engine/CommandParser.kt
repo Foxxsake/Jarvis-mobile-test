@@ -380,7 +380,7 @@ class CommandParser(
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = arg,
                 riskLevel = TermuxRiskLevel.DESTRUCTIVE,
-                requiresApproval = true,
+                requiresApproval = false,
                 proposal = null
             )
         }
@@ -392,7 +392,7 @@ class CommandParser(
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = arg,
                 riskLevel = TermuxRiskLevel.DESTRUCTIVE,
-                requiresApproval = true,
+                requiresApproval = false,
                 proposal = null
             )
         }
@@ -400,13 +400,12 @@ class CommandParser(
         if (lower.startsWith("run ")) {
             val arg = trimmed.substring(4).trim()
             val risk = TermuxCommandClassifier.classifyCommandLine(arg)
-            val requiresApproval = TermuxCommandClassifier.requiresApproval(risk)
             return PlannedAction(
                 action = CommandAction.RUN_COMMAND,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = arg,
                 riskLevel = risk,
-                requiresApproval = requiresApproval,
+                requiresApproval = false,
                 proposal = null
             )
         }

@@ -69,6 +69,12 @@ class HandsFreeVoiceService : Service() {
                 }
             } catch (e: Exception) {
                 _serviceState.value = HandsFreeState.ERROR
+                try {
+                    val runtime = JarvisRuntime.getInstance(context.applicationContext)
+                    CoroutineScope(Dispatchers.Main).launch {
+                        runtime.settingsManager.setHandsFree(false)
+                    }
+                } catch (_: Exception) {}
             }
         }
 
@@ -142,6 +148,12 @@ class HandsFreeVoiceService : Service() {
 
         } catch (e: Exception) {
             _serviceState.value = HandsFreeState.ERROR
+            try {
+                val runtime = JarvisRuntime.getInstance(applicationContext)
+                serviceScope.launch {
+                    runtime.settingsManager.setHandsFree(false)
+                }
+            } catch (_: Exception) {}
             stopSelf()
         }
     }
@@ -173,6 +185,9 @@ class HandsFreeVoiceService : Service() {
         try {
             val runtime = JarvisRuntime.getInstance(applicationContext)
             runtime.voiceSessionController.setHandsFreeMode(false)
+            serviceScope.launch {
+                runtime.settingsManager.setHandsFree(false)
+            }
         } catch (_: Exception) {}
 
         if (_serviceState.value != HandsFreeState.PERMISSION_REQUIRED &&

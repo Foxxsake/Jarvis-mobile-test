@@ -84,58 +84,18 @@ data class JarvisUiState(
  * Does NOT own or duplicate command parsing, routing, or execution logic.
  */
 class JarvisViewModel(
-    speechManager: SpeechManager? = null,
-    toolRegistry: ToolRegistry? = null,
-    repository: ActivityRepository? = null,
-    toolExecutor: ToolExecutor? = null,
-    contactResolver: ContactResolver? = null,
-    settingsManager: SettingsManager? = null,
-    voiceOutput: JarvisVoiceOutput? = null,
-    injectedVoiceSessionController: VoiceSessionController? = null,
+    val runtime: JarvisRuntime,
     val wakeWordEngine: WakeWordEngine = SherpaWakeWordEngine(),
-    val speakerVerifier: SpeakerVerifier = LocalSpeakerVerifier(),
-    termuxWorker: TermuxWorker? = null,
-    workspaceRegistry: WorkspaceRegistry? = null,
-    val runtime: JarvisRuntime? = null
+    val speakerVerifier: SpeakerVerifier = LocalSpeakerVerifier()
 ) : ViewModel() {
 
-    val settingsManager: SettingsManager = settingsManager
-        ?: runtime?.settingsManager
-        ?: throw IllegalArgumentException("SettingsManager or JarvisRuntime is required")
-
-    val toolRegistry: ToolRegistry = toolRegistry
-        ?: runtime?.toolRegistry
-        ?: throw IllegalArgumentException("ToolRegistry or JarvisRuntime is required")
-
-    val repository: ActivityRepository = repository
-        ?: runtime?.activityRepository
-        ?: throw IllegalArgumentException("ActivityRepository or JarvisRuntime is required")
-
-    val workspaceRegistry: WorkspaceRegistry = workspaceRegistry
-        ?: runtime?.workspaceRegistry
-        ?: com.example.data.workspace.LocalWorkspaceRegistry(this.settingsManager.context)
-
-    val termuxWorker: TermuxWorker = termuxWorker
-        ?: runtime?.termuxWorker
-        ?: throw IllegalArgumentException("TermuxWorker or JarvisRuntime is required")
-
-    private val fallbackToolExecutor: ToolExecutor? = toolExecutor
-
-    val voiceSessionController: VoiceSessionController = injectedVoiceSessionController
-        ?: runtime?.voiceSessionController
-        ?: if (speechManager != null) {
-            val vOutput = voiceOutput ?: object : JarvisVoiceOutput {
-                private val _state = MutableStateFlow<VoiceOutputState>(VoiceOutputState.Idle)
-                override val state: StateFlow<VoiceOutputState> = _state.asStateFlow()
-                override fun isAvailable(): Boolean = true
-                override fun speak(text: String, onDone: (() -> Unit)?) { onDone?.invoke() }
-                override fun stop() {}
-                override fun shutdown() {}
-            }
-            VoiceSessionController(speechManager, vOutput, AudioSessionManager())
-        } else {
-            throw IllegalArgumentException("VoiceSessionController, SpeechManager or JarvisRuntime is required")
-        }
+    val settingsManager: SettingsManager = runtime.settingsManager
+    val toolRegistry: ToolRegistry = runtime.toolRegistry
+    val repository: ActivityRepository = runtime.activityRepository
+    val workspaceRegistry: WorkspaceRegistry = runtime.workspaceRegistry
+    val termuxWorker: TermuxWorker = runtime.termuxWorker
+    val toolExecutor: ToolExecutor = runtime.toolExecutor
+    val voiceSessionController: VoiceSessionController = runtime.voiceSessionController
 
     private val _uiState = MutableStateFlow(JarvisUiState())
     val uiState: StateFlow<JarvisUiState> = _uiState.asStateFlow()
@@ -183,68 +143,36 @@ class JarvisViewModel(
         voiceSessionController.addListener(uiVoiceListener)
 
         // Sync UI state from JarvisRuntime
-        if (runtime != null) {
-            viewModelScope.launch {
-                runtime.executionState.collectLatest { rtState ->
-                    _uiState.value = _uiState.value.copy(
-                        status = rtState.status,
-                        pendingApproval = rtState.pendingApproval,
-                        pendingActionIndex = rtState.pendingActionIndex,
-                        planToApprove = rtState.planToApprove,
-                        resolvedContact = rtState.resolvedContact,
-                        ambiguousQuery = rtState.ambiguousQuery,
-                        ambiguousCandidates = rtState.ambiguousCandidates,
-                        multipleDestinationsName = rtState.multipleDestinationsName,
-                        multipleDestinations = rtState.multipleDestinations,
-                        pendingMessageForDestination = rtState.pendingMessageForDestination,
-                        ambiguousAppQuery = rtState.ambiguousAppQuery,
-                        ambiguousAppCandidates = rtState.ambiguousAppCandidates,
-                        permissionRationaleNeeded = rtState.permissionRationaleNeeded,
-                        permissionPermanentlyDenied = rtState.permissionPermanentlyDenied,
-                        lastRecognizedText = if (rtState.lastRecognizedText.isNotBlank()) rtState.lastRecognizedText else _uiState.value.lastRecognizedText,
-                        speechEventId = if (rtState.speechEventId > 0) rtState.speechEventId else _uiState.value.speechEventId,
-                        termuxStatus = rtState.termuxStatus,
-                        activeWorkspace = rtState.activeWorkspace,
-                        lastTermuxResult = rtState.lastTermuxResult
-                    )
-                }
+        viewModelScope.launch {
+            runtime.executionState.collectLatest { rtState ->
+                _uiState.value = _uiState.value.copy(
+                    status = rtState.status,
+                    pendingApproval = rtState.pendingApproval,
+                    pendingActionIndex = rtState.pendingActionIndex,
+                    planToApprove = rtState.planToApprove,
+                    resolvedContact = rtState.resolvedContact,
+                    ambiguousQuery = rtState.ambiguousQuery,
+                    ambiguousCandidates = rtState.ambiguousCandidates,
+                    multipleDestinationsName = rtState.multipleDestinationsName,
+                    multipleDestinations = rtState.multipleDestinations,
+                    pendingMessageForDestination = rtState.pendingMessageForDestination,
+                    ambiguousAppQuery = rtState.ambiguousAppQuery,
+                    ambiguousAppCandidates = rtState.ambiguousAppCandidates,
+                    permissionRationaleNeeded = rtState.permissionRationaleNeeded,
+                    permissionPermanentlyDenied = rtState.permissionPermanentlyDenied,
+                    lastRecognizedText = if (rtState.lastRecognizedText.isNotBlank()) rtState.lastRecognizedText else _uiState.value.lastRecognizedText,
+                    speechEventId = if (rtState.speechEventId > 0) rtState.speechEventId else _uiState.value.speechEventId,
+                    termuxStatus = rtState.termuxStatus,
+                    activeWorkspace = rtState.activeWorkspace,
+                    lastTermuxResult = rtState.lastTermuxResult
+                )
             }
-        } else {
-            if (speechManager != null) {
-                viewModelScope.launch {
-                    speechManager.speechState.collectLatest { speechState ->
-                        voiceSessionController.handleSpeechState(speechState)
-                    }
-                }
-            }
-            voiceSessionController.addListener(object : VoiceSessionListener {
-                override fun onStateChanged(state: VoiceSessionState) {}
-                override fun onSpeechRecognized(text: String) {
-                    submitCommand(text)
-                }
-                override fun onError(message: String) {}
-            })
         }
     }
 
     fun submitCommand(text: String) {
         if (text.isBlank()) return
-        if (runtime != null) {
-            runtime.executeCommand(text)
-        } else {
-            _uiState.value = _uiState.value.copy(
-                lastRecognizedText = text,
-                speechEventId = System.currentTimeMillis()
-            )
-            viewModelScope.launch {
-                val parser = com.example.engine.CommandParser(toolMatcher = com.example.engine.ToolCommandMatcher { toolRegistry.tools.value })
-                val plan = parser.parse(text)
-                if (plan.actions.isNotEmpty()) {
-                    val act = plan.actions.first()
-                    fallbackToolExecutor?.executeAction(act, null, isLocalProcessingEnabled = true)
-                }
-            }
-        }
+        runtime.executeCommand(text)
     }
 
     fun startListening() {
@@ -256,58 +184,51 @@ class JarvisViewModel(
     }
 
     fun approvePending() {
-        runtime?.approvePending()
+        runtime.approvePending()
     }
 
     fun rejectPending() {
-        runtime?.rejectPending()
+        runtime.rejectPending()
     }
 
     fun selectContactCandidate(candidate: ContactCandidate) {
-        runtime?.selectContactCandidate(candidate)
+        runtime.selectContactCandidate(candidate)
     }
 
     fun selectContactDestination(destination: ContactDestination) {
-        runtime?.selectContactDestination(destination)
+        runtime.selectContactDestination(destination)
     }
 
     fun selectAppCandidate(tool: Tool) {
-        runtime?.selectAppCandidate(tool)
+        runtime.selectAppCandidate(tool)
     }
 
     fun dismissPermissionRationale() {
-        runtime?.dismissPermissionRationale()
-            ?: run { _uiState.value = _uiState.value.copy(permissionRationaleNeeded = null) }
+        runtime.dismissPermissionRationale()
     }
 
     fun dismissPermissionPermanentlyDenied() {
-        runtime?.dismissPermissionPermanentlyDenied()
-            ?: run { _uiState.value = _uiState.value.copy(permissionPermanentlyDenied = null) }
+        runtime.dismissPermissionPermanentlyDenied()
     }
 
     fun showPermissionRationale(permType: String) {
-        runtime?.showPermissionRationale(permType)
-            ?: run { _uiState.value = _uiState.value.copy(permissionRationaleNeeded = permType) }
+        runtime.showPermissionRationale(permType)
     }
 
     fun showPermissionPermanentlyDenied(permType: String) {
-        runtime?.showPermissionPermanentlyDenied(permType)
-            ?: run { _uiState.value = _uiState.value.copy(permissionPermanentlyDenied = permType) }
+        runtime.showPermissionPermanentlyDenied(permType)
     }
 
     fun refreshActiveWorkspace() {
-        runtime?.refreshActiveWorkspace()
+        runtime.refreshActiveWorkspace()
     }
 
     fun setWorkspacePath(displayName: String, path: String) {
-        runtime?.setWorkspacePath(displayName, path)
+        runtime.setWorkspacePath(displayName, path)
     }
 
     fun refreshTermuxStatus() {
-        runtime?.refreshTermuxStatus() ?: viewModelScope.launch {
-            val status = termuxWorker.checkConnectionState()
-            _uiState.value = _uiState.value.copy(termuxStatus = status)
-        }
+        runtime.refreshTermuxStatus()
     }
 
     fun refreshTools() {
@@ -317,20 +238,20 @@ class JarvisViewModel(
     suspend fun probeTermuxConnection(): TermuxConnectionStatus {
         val result = termuxWorker.probeConnection()
         _uiState.value = _uiState.value.copy(termuxStatus = result)
-        runtime?.refreshTermuxStatus()
+        runtime.refreshTermuxStatus()
         return result
     }
 
     fun toggleToolEnabled(toolId: String, enabled: Boolean) {
-        runtime?.toggleToolEnabled(toolId, enabled)
+        runtime.toggleToolEnabled(toolId, enabled)
     }
 
     fun updateToolPolicy(tool: Tool, policy: AccessPolicy) {
-        runtime?.updateToolPolicy(tool, policy)
+        runtime.updateToolPolicy(tool, policy)
     }
 
     fun updateAppPolicy(packageName: String, policy: AccessPolicy) {
-        runtime?.updateAppPolicy(packageName, policy)
+        runtime.updateAppPolicy(packageName, policy)
     }
 
     fun startHandsFree(context: Context) {

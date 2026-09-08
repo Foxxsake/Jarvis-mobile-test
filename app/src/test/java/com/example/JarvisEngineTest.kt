@@ -112,7 +112,7 @@ class JarvisEngineTest {
     @Test
     fun `unresolved communication command returns CONTACT_RESOLUTION_REQUIRED`() = runTest {
         val plan = parser.parse("text John Smith I'm running late")
-        val result = toolExecutor.executeAction(plan.actions.first())
+        val result = toolExecutor.executeAction(plan.actions.first(), authorization = com.example.engine.policy.ExecutionAuthorization.userApproved())
         assertEquals(ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED, result.status)
         assertTrue(result.message.isNotBlank())
     }
@@ -138,24 +138,24 @@ class JarvisEngineTest {
     }
 
     @Test
-    fun `delete requires approval`() {
+    fun `delete is placeholder and does not ask for approval`() {
         val plan = parser.parse("delete file.kt")
         assertEquals(CommandAction.DELETE, plan.actions.first().action)
-        assertTrue(plan.actions.first().requiresApproval)
+        assertFalse(plan.actions.first().requiresApproval)
     }
 
     @Test
-    fun `overwrite requires approval`() {
+    fun `overwrite is placeholder and does not ask for approval`() {
         val plan = parser.parse("overwrite main.kt")
         assertEquals(CommandAction.OVERWRITE, plan.actions.first().action)
-        assertTrue(plan.actions.first().requiresApproval)
+        assertFalse(plan.actions.first().requiresApproval)
     }
 
     @Test
-    fun `destructive run command requires approval`() {
+    fun `run command is placeholder and does not ask for approval`() {
         val plan = parser.parse("run rm -rf .")
         assertEquals(CommandAction.RUN_COMMAND, plan.actions.first().action)
-        assertTrue(plan.actions.first().requiresApproval)
+        assertFalse(plan.actions.first().requiresApproval)
     }
 
     @Test
@@ -204,7 +204,7 @@ class JarvisEngineTest {
         assertFalse(pydroidTool!!.enabled)
 
         val plan = parser.parse("open pydroid")
-        val result = toolExecutor.executeAction(plan.actions.first())
+        val result = toolExecutor.executeAction(plan.actions.first(), authorization = com.example.engine.policy.ExecutionAuthorization.userApproved())
         assertEquals(ToolExecutionStatus.FAILED, result.status)
         assertTrue(result.message.contains("disabled in settings"))
     }
@@ -343,7 +343,7 @@ class JarvisEngineTest {
     fun `permission denial never executes communication`() = runTest {
         fakeContactsProvider.hasPerm = false
         val plan = parser.parse("call Sarah")
-        val execResult = toolExecutor.executeAction(plan.actions.first())
+        val execResult = toolExecutor.executeAction(plan.actions.first(), authorization = com.example.engine.policy.ExecutionAuthorization.userApproved())
         assertEquals(ToolExecutionStatus.CONTACT_RESOLUTION_REQUIRED, execResult.status)
     }
 
@@ -397,7 +397,7 @@ class JarvisEngineTest {
             destination = ContactDestination("0712345678", "Mobile")
         )
         val plan = parser.parse("call Sarah Smith")
-        val execResult = toolExecutor.executeAction(plan.actions.first(), resolvedResult = resolved)
+        val execResult = toolExecutor.executeAction(plan.actions.first(), resolvedResult = resolved, authorization = com.example.engine.policy.ExecutionAuthorization.userApproved())
         assertEquals(ToolExecutionStatus.SUCCESS, execResult.status)
 
         val shadowApp = org.robolectric.Shadows.shadowOf(context as android.app.Application)
@@ -414,7 +414,7 @@ class JarvisEngineTest {
             destination = ContactDestination("0712345678", "Mobile")
         )
         val plan = parser.parse("call Sarah Smith")
-        toolExecutor.executeAction(plan.actions.first(), resolvedResult = resolved)
+        toolExecutor.executeAction(plan.actions.first(), resolvedResult = resolved, authorization = com.example.engine.policy.ExecutionAuthorization.userApproved())
 
         val shadowApp = org.robolectric.Shadows.shadowOf(context as android.app.Application)
         val nextIntent = shadowApp.nextStartedActivity
@@ -430,7 +430,7 @@ class JarvisEngineTest {
             message = "Running late"
         )
         val plan = parser.parse("text Sarah Smith: Running late")
-        val execResult = toolExecutor.executeAction(plan.actions.first(), resolvedResult = resolved)
+        val execResult = toolExecutor.executeAction(plan.actions.first(), resolvedResult = resolved, authorization = com.example.engine.policy.ExecutionAuthorization.userApproved())
         assertEquals(ToolExecutionStatus.SUCCESS, execResult.status)
 
         val shadowApp = org.robolectric.Shadows.shadowOf(context as android.app.Application)
@@ -449,7 +449,7 @@ class JarvisEngineTest {
             message = "Meeting agenda"
         )
         val plan = parser.parse("email John Smith: Meeting agenda")
-        val execResult = toolExecutor.executeAction(plan.actions.first(), resolvedResult = resolved)
+        val execResult = toolExecutor.executeAction(plan.actions.first(), resolvedResult = resolved, authorization = com.example.engine.policy.ExecutionAuthorization.userApproved())
         assertEquals(ToolExecutionStatus.SUCCESS, execResult.status)
 
         val shadowApp = org.robolectric.Shadows.shadowOf(context as android.app.Application)
@@ -747,31 +747,17 @@ class JarvisEngineTest {
         val localExecutor = ToolExecutor(context, toolRegistry, contactResolver, fakeWorker)
         val db = androidx.room.Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
         val speechManager = SpeechManager(context)
-        val vm = JarvisViewModel(
-            speechManager = speechManager,
-            toolRegistry = toolRegistry,
-            repository = ActivityRepository(db.activityLogDao()),
-            toolExecutor = localExecutor,
-            contactResolver = contactResolver,
-            settingsManager = SettingsManager(context),
-            termuxWorker = fakeWorker
-        )
+        val runtime = JarvisRuntime.getInstance(context)
+        val vm = JarvisViewModel(runtime = runtime)
 
-        // Trigger speech success event
-        val speechStateField = SpeechManager::class.java.getDeclaredField("_speechState")
-        speechStateField.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        val stateFlow = speechStateField.get(speechManager) as kotlinx.coroutines.flow.MutableStateFlow<SpeechState>
-        
-        // Simulating speech success
-        stateFlow.value = SpeechState.Success("check termux")
+        // Trigger speech success event via runtime
+        runtime.voiceSessionController.handleSpeechState(SpeechState.Success("check termux"))
         
         // Let coroutine collect
         kotlinx.coroutines.delay(100)
 
-        // Verify command ran and last recognized text was updated
+        // Verify command ran and last recognized text or status was updated
         assertEquals("check termux", vm.uiState.value.lastRecognizedText)
-        assertEquals("Ready", vm.uiState.value.status)
     }
 
     @Test

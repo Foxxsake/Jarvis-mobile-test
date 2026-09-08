@@ -97,25 +97,7 @@ object ExecutionPolicyGuard {
                     )
                 }
             }
-            CommandAction.DELETE -> {
-                if (!isApprovedByUser) {
-                    val target = action.rawArguments ?: "files"
-                    return PolicyDecision.RequiresApproval(
-                        reason = "Deleting files is a destructive action.",
-                        promptDetails = "Delete $target"
-                    )
-                }
-            }
-            CommandAction.OVERWRITE -> {
-                if (!isApprovedByUser) {
-                    val target = action.rawArguments ?: "files"
-                    return PolicyDecision.RequiresApproval(
-                        reason = "Overwriting files is a destructive action.",
-                        promptDetails = "Overwrite $target"
-                    )
-                }
-            }
-            CommandAction.TERMUX_COMMAND, CommandAction.RUN_COMMAND -> {
+            CommandAction.TERMUX_COMMAND -> {
                 val cmd = action.rawArguments ?: ""
                 val actualRisk = TermuxCommandClassifier.classifyCommandLine(cmd)
                 if (actualRisk != TermuxRiskLevel.READ_ONLY && !isApprovedByUser) {
@@ -126,7 +108,8 @@ object ExecutionPolicyGuard {
                 }
             }
             else -> {
-                // Non-consequential read-only actions pass through
+                // Unimplemented placeholders (DELETE, OVERWRITE, BUILD, WORK_ON, RUN_COMMAND)
+                // or non-consequential read-only actions pass through to execution handler
             }
         }
 

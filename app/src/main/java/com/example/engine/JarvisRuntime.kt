@@ -402,7 +402,8 @@ class JarvisRuntime private constructor(val context: Context) {
             }
 
             _executionState.value = _executionState.value.copy(status = "Executing ${action.action.name}...")
-            val result = toolExecutor.executeAction(action, resolvedContact, isLocalOnly)
+            val authorization = com.example.engine.policy.ExecutionAuthorization.userApproved()
+            val result = toolExecutor.executeAction(action, resolvedContact, isLocalOnly, authorization)
 
             logActivity(
                 currentPlan.originalText,

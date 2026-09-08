@@ -105,8 +105,14 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
             val handsFreePermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
                 contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
             ) { permissionsMap ->
-                val micGranted = permissionsMap[android.Manifest.permission.RECORD_AUDIO] == true
-                if (micGranted) {
+                val micGranted = permissionsMap[android.Manifest.permission.RECORD_AUDIO]
+                    ?: (androidx.core.content.ContextCompat.checkSelfPermission(voiceContext, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+                val notifGranted = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    permissionsMap[android.Manifest.permission.POST_NOTIFICATIONS]
+                        ?: (androidx.core.content.ContextCompat.checkSelfPermission(voiceContext, android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+                } else true
+
+                if (micGranted && notifGranted) {
                     coroutineScope.launch {
                         viewModel.settingsManager.setHandsFree(true)
                         viewModel.startHandsFree(voiceContext)
@@ -133,8 +139,7 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                     label = "Hands-free JARVIS",
                     description = "Enables foreground microphone service for continuous hands-free interaction",
                     checked = (handsFreeState == com.example.engine.voice.handsfree.HandsFreeState.ACTIVE ||
-                            handsFreeState == com.example.engine.voice.handsfree.HandsFreeState.STARTING ||
-                            handsFree),
+                            handsFreeState == com.example.engine.voice.handsfree.HandsFreeState.STARTING),
                     onCheckedChange = { isChecked ->
                         if (isChecked) {
                             val hasAudioPerm = androidx.core.content.ContextCompat.checkSelfPermission(
@@ -142,13 +147,25 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                                 android.Manifest.permission.RECORD_AUDIO
                             ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
-                            if (hasAudioPerm) {
+                            val hasNotifPerm = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                                androidx.core.content.ContextCompat.checkSelfPermission(
+                                    voiceContext,
+                                    android.Manifest.permission.POST_NOTIFICATIONS
+                                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                            } else true
+
+                            if (hasAudioPerm && hasNotifPerm) {
                                 coroutineScope.launch {
                                     viewModel.settingsManager.setHandsFree(true)
                                     viewModel.startHandsFree(voiceContext)
                                 }
                             } else {
-                                handsFreePermissionLauncher.launch(permissionsToRequest)
+                                val permsToRequest = mutableListOf<String>()
+                                if (!hasAudioPerm) permsToRequest.add(android.Manifest.permission.RECORD_AUDIO)
+                                if (!hasNotifPerm && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                                    permsToRequest.add(android.Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                                handsFreePermissionLauncher.launch(permsToRequest.toTypedArray())
                             }
                         } else {
                             coroutineScope.launch {
@@ -180,7 +197,7 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                         android.Manifest.permission.POST_NOTIFICATIONS
                     ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
-                    if (!hasNotifPerm && (handsFreeState == com.example.engine.voice.handsfree.HandsFreeState.ACTIVE || handsFree)) {
+                    if (!hasNotifPerm && handsFreeState == com.example.engine.voice.handsfree.HandsFreeState.ACTIVE) {
                         Text(
                             text = "Note: Notification permission is not granted. Status notification will not appear in the drawer.",
                             style = MaterialTheme.typography.bodySmall,

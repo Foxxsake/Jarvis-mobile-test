@@ -114,19 +114,7 @@ class MainActivity : ComponentActivity() {
                         factory = object : ViewModelProvider.Factory {
                             @Suppress("UNCHECKED_CAST")
                             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                                return JarvisViewModel(
-                                    repository = repository,
-                                    settingsManager = settingsManager,
-                                    toolRegistry = toolRegistry,
-                                    toolExecutor = toolExecutor,
-                                    contactResolver = contactResolver,
-                                    speechManager = speechManager,
-                                    voiceOutput = voiceOutput,
-                                    injectedVoiceSessionController = runtime.voiceSessionController,
-                                    termuxWorker = termuxWorker,
-                                    workspaceRegistry = workspaceRegistry,
-                                    runtime = runtime
-                                ) as T
+                                return JarvisViewModel(runtime = runtime) as T
                             }
                         }
                     )
