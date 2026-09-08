@@ -82,6 +82,7 @@ class JarvisViewModel(
     private val contactResolver: ContactResolver,
     val settingsManager: SettingsManager,
     val voiceOutput: JarvisVoiceOutput? = null,
+    injectedVoiceSessionController: VoiceSessionController? = null,
     val wakeWordEngine: WakeWordEngine = SherpaWakeWordEngine(),
     val speakerVerifier: SpeakerVerifier = LocalSpeakerVerifier(),
     val termuxWorker: com.example.engine.termux.TermuxWorker = com.example.engine.termux.FakeTermuxWorker(),
@@ -100,7 +101,7 @@ class JarvisViewModel(
         override fun shutdown() {}
     }
 
-    val voiceSessionController = VoiceSessionController(
+    val voiceSessionController: VoiceSessionController = injectedVoiceSessionController ?: VoiceSessionController(
         speechManager = speechManager,
         voiceOutput = fallbackVoiceOutput
     )
@@ -188,16 +189,18 @@ class JarvisViewModel(
             }
         })
 
-        // Forward raw speech state into voiceSessionController
-        viewModelScope.launch {
-            speechManager.speechState.collectLatest { state ->
-                voiceSessionController.handleSpeechState(state)
+        // Forward raw speech state into voiceSessionController only if not already managed by JarvisRuntime
+        if (injectedVoiceSessionController == null) {
+            viewModelScope.launch {
+                speechManager.speechState.collectLatest { state ->
+                    voiceSessionController.handleSpeechState(state)
+                }
             }
         }
     }
 
     fun startListening() {
-        speechManager.startListening()
+        voiceSessionController.startPushToTalk()
     }
 
     fun submitCommand(text: String) {

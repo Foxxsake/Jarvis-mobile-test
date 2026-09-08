@@ -58,7 +58,7 @@ class MainActivity : ComponentActivity() {
         activeViewModel?.let { vm ->
             if (isGranted) {
                 if (permission == android.Manifest.permission.RECORD_AUDIO) {
-                    speechManager.startListening()
+                    vm.startListening()
                 } else if (permission == android.Manifest.permission.READ_CONTACTS) {
                     val pendingCmd = vm.uiState.value.pendingApproval
                     if (pendingCmd != null) {
@@ -122,6 +122,7 @@ class MainActivity : ComponentActivity() {
                                     contactResolver = contactResolver,
                                     speechManager = speechManager,
                                     voiceOutput = voiceOutput,
+                                    injectedVoiceSessionController = runtime.voiceSessionController,
                                     termuxWorker = termuxWorker,
                                     workspaceRegistry = workspaceRegistry
                                 ) as T
@@ -160,7 +161,7 @@ class MainActivity : ComponentActivity() {
                                             android.Manifest.permission.RECORD_AUDIO
                                         ) == PackageManager.PERMISSION_GRANTED
                                     ) {
-                                        speechManager.startListening()
+                                        viewModel.startListening()
                                     } else {
                                         val shouldShowRationale = androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
                                             this@MainActivity,
@@ -214,14 +215,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        speechManager.destroyRecognizer()
-        if (::voiceOutput.isInitialized) {
-            voiceOutput.shutdown()
         }
     }
 }

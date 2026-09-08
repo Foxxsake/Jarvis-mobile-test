@@ -10,6 +10,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+enum class VoiceSessionMode {
+    IDLE,
+    PUSH_TO_TALK,
+    HANDS_FREE
+}
+
 enum class VoiceSessionState {
     IDLE,
     LISTENING,
@@ -33,7 +39,7 @@ interface VoiceSessionListener {
  * Prevents audio feedback loops by pausing/stopping speech recognition while JARVIS speaks,
  * and handles spoken response delivery according to user settings.
  *
- * Supports hands-free continuous listening mode with automatic loop re-arming.
+ * Coordinates Push-To-Talk and Hands-Free continuous listening mode with clean serialized states.
  */
 class VoiceSessionController(
     private val speechManager: com.example.engine.speech.SpeechManager,
@@ -46,12 +52,26 @@ class VoiceSessionController(
     private val _state = MutableStateFlow(VoiceSessionState.IDLE)
     val state: StateFlow<VoiceSessionState> = _state.asStateFlow()
 
+    private val _sessionMode = MutableStateFlow(VoiceSessionMode.IDLE)
+    val sessionMode: StateFlow<VoiceSessionMode> = _sessionMode.asStateFlow()
+
     private var spokenResponsesEnabled = true
     private var handsFreeMode = false
-    private var listener: VoiceSessionListener? = null
+    private val listeners = java.util.concurrent.CopyOnWriteArraySet<VoiceSessionListener>()
 
     fun setListener(listener: VoiceSessionListener?) {
-        this.listener = listener
+        listeners.clear()
+        if (listener != null) {
+            listeners.add(listener)
+        }
+    }
+
+    fun addListener(listener: VoiceSessionListener) {
+        listeners.add(listener)
+    }
+
+    fun removeListener(listener: VoiceSessionListener) {
+        listeners.remove(listener)
     }
 
     fun setSpokenResponsesEnabled(enabled: Boolean) {
@@ -64,12 +84,17 @@ class VoiceSessionController(
         this.handsFreeMode = enabled
         rearmJob?.cancel()
         if (enabled) {
-            if (_state.value == VoiceSessionState.IDLE) {
-                startListening()
+            if (_state.value == VoiceSessionState.IDLE && _sessionMode.value != VoiceSessionMode.PUSH_TO_TALK) {
+                _sessionMode.value = VoiceSessionMode.HANDS_FREE
+                scheduleHandsFreeRearm(50L)
             }
         } else {
-            if (_state.value == VoiceSessionState.LISTENING) {
-                stopListening()
+            if (_sessionMode.value == VoiceSessionMode.HANDS_FREE) {
+                _sessionMode.value = VoiceSessionMode.IDLE
+                speechManager.stopListening()
+                if (_state.value == VoiceSessionState.LISTENING || _state.value == VoiceSessionState.TRANSCRIBING) {
+                    updateState(VoiceSessionState.IDLE)
+                }
             }
         }
     }
@@ -77,22 +102,40 @@ class VoiceSessionController(
     fun isHandsFreeMode(): Boolean = handsFreeMode
 
     /**
-     * Updates internal state and notifies listener.
+     * Explicit Push-To-Talk invocation from user action (e.g. mic button).
+     * Stops any ongoing TTS, pauses hands-free rearm, and initiates a single push-to-talk listening session.
      */
-    private fun updateState(newState: VoiceSessionState) {
-        _state.value = newState
-        listener?.onStateChanged(newState)
+    fun startPushToTalk() {
+        rearmJob?.cancel()
+        voiceOutput.stop()
+        _sessionMode.value = VoiceSessionMode.PUSH_TO_TALK
+        updateState(VoiceSessionState.LISTENING)
+        speechManager.startListening()
+    }
+
+    /**
+     * Internal hands-free listening trigger.
+     */
+    private fun startHandsFreeListening() {
+        if (!handsFreeMode) return
+        if (_sessionMode.value == VoiceSessionMode.PUSH_TO_TALK) return
+        if (_state.value == VoiceSessionState.WAITING_FOR_APPROVAL) return
+        if (_state.value == VoiceSessionState.SPEAKING) return
+
+        _sessionMode.value = VoiceSessionMode.HANDS_FREE
+        updateState(VoiceSessionState.LISTENING)
+        speechManager.startListening()
     }
 
     /**
      * User or trigger requested to start listening.
-     * Ensures any previous speech output is stopped before starting listening.
      */
     fun startListening() {
-        rearmJob?.cancel()
-        voiceOutput.stop()
-        updateState(VoiceSessionState.LISTENING)
-        speechManager.startListening()
+        if (handsFreeMode) {
+            startHandsFreeListening()
+        } else {
+            startPushToTalk()
+        }
     }
 
     /**
@@ -101,21 +144,25 @@ class VoiceSessionController(
     fun stopListening() {
         rearmJob?.cancel()
         speechManager.stopListening()
-        if (_state.value == VoiceSessionState.LISTENING) {
+        if (_state.value == VoiceSessionState.LISTENING || _state.value == VoiceSessionState.TRANSCRIBING) {
             updateState(VoiceSessionState.IDLE)
+        }
+        if (_sessionMode.value == VoiceSessionMode.PUSH_TO_TALK) {
+            _sessionMode.value = if (handsFreeMode) VoiceSessionMode.HANDS_FREE else VoiceSessionMode.IDLE
         }
     }
 
     /**
      * Schedule re-arming of the microphone for continuous hands-free operation.
      */
-    private fun scheduleHandsFreeRearm(delayMs: Long = 300L) {
+    private fun scheduleHandsFreeRearm(delayMs: Long = 350L) {
         if (!handsFreeMode) return
+        if (_state.value == VoiceSessionState.WAITING_FOR_APPROVAL) return
         rearmJob?.cancel()
         rearmJob = controllerScope.launch {
             delay(delayMs)
-            if (handsFreeMode && _state.value == VoiceSessionState.IDLE) {
-                startListening()
+            if (handsFreeMode && _state.value == VoiceSessionState.IDLE && _state.value != VoiceSessionState.WAITING_FOR_APPROVAL) {
+                startHandsFreeListening()
             }
         }
     }
@@ -128,7 +175,7 @@ class VoiceSessionController(
             is com.example.engine.speech.SpeechState.Ready -> {
                 if (_state.value == VoiceSessionState.LISTENING || _state.value == VoiceSessionState.TRANSCRIBING) {
                     updateState(VoiceSessionState.IDLE)
-                    if (handsFreeMode) {
+                    if (handsFreeMode && _sessionMode.value == VoiceSessionMode.HANDS_FREE) {
                         scheduleHandsFreeRearm(200L)
                     }
                 }
@@ -141,28 +188,34 @@ class VoiceSessionController(
             }
             is com.example.engine.speech.SpeechState.Success -> {
                 updateState(VoiceSessionState.PROCESSING)
-                listener?.onSpeechRecognized(speechState.text)
+                listeners.forEach { it.onSpeechRecognized(speechState.text) }
             }
             is com.example.engine.speech.SpeechState.Error -> {
-                if (handsFreeMode && speechState.isTransient) {
-                    // Transient timeout/silence in continuous mode: re-arm listening
+                if (_sessionMode.value == VoiceSessionMode.HANDS_FREE && speechState.isTransient) {
+                    // Normal silence or timeout in continuous hands-free mode:
+                    // Treat as a quiet listening cycle without flashing error on the UI.
                     updateState(VoiceSessionState.IDLE)
-                    scheduleHandsFreeRearm(300L)
+                    scheduleHandsFreeRearm(350L)
                 } else {
                     updateState(VoiceSessionState.ERROR)
-                    listener?.onError(speechState.message)
+                    listeners.forEach { it.onError(speechState.message) }
                     if (handsFreeMode) {
+                        _sessionMode.value = VoiceSessionMode.HANDS_FREE
                         scheduleHandsFreeRearm(1500L)
+                    } else {
+                        _sessionMode.value = VoiceSessionMode.IDLE
                     }
                 }
             }
             is com.example.engine.speech.SpeechState.PermissionRequired -> {
                 updateState(VoiceSessionState.ERROR)
-                listener?.onError("Microphone permission required")
+                listeners.forEach { it.onError("Microphone permission required") }
+                _sessionMode.value = VoiceSessionMode.IDLE
             }
             is com.example.engine.speech.SpeechState.Unavailable -> {
                 updateState(VoiceSessionState.ERROR)
-                listener?.onError("Speech recognition unavailable")
+                listeners.forEach { it.onError("Speech recognition unavailable") }
+                _sessionMode.value = VoiceSessionMode.IDLE
             }
         }
     }
@@ -172,10 +225,11 @@ class VoiceSessionController(
      */
     fun onWaitingForApproval(promptText: String? = null) {
         rearmJob?.cancel()
+        _sessionMode.value = VoiceSessionMode.IDLE
         updateState(VoiceSessionState.WAITING_FOR_APPROVAL)
         if (spokenResponsesEnabled && !promptText.isNullOrBlank()) {
             speakResponse(promptText) {
-                // Return to waiting for approval state after speaking finishes
+                // Stay in WAITING_FOR_APPROVAL after speech completes
                 updateState(VoiceSessionState.WAITING_FOR_APPROVAL)
             }
         }
@@ -189,7 +243,13 @@ class VoiceSessionController(
         if (!spokenResponsesEnabled) {
             onDone?.invoke()
             if (handsFreeMode && _state.value != VoiceSessionState.WAITING_FOR_APPROVAL) {
+                _sessionMode.value = VoiceSessionMode.HANDS_FREE
                 scheduleHandsFreeRearm(200L)
+            } else {
+                _sessionMode.value = VoiceSessionMode.IDLE
+                if (_state.value == VoiceSessionState.SPEAKING || _state.value == VoiceSessionState.PROCESSING) {
+                    updateState(VoiceSessionState.IDLE)
+                }
             }
             return
         }
@@ -204,7 +264,10 @@ class VoiceSessionController(
             }
             onDone?.invoke()
             if (handsFreeMode && _state.value != VoiceSessionState.WAITING_FOR_APPROVAL) {
-                scheduleHandsFreeRearm(250L)
+                _sessionMode.value = VoiceSessionMode.HANDS_FREE
+                scheduleHandsFreeRearm(300L)
+            } else {
+                _sessionMode.value = VoiceSessionMode.IDLE
             }
         }
     }
@@ -226,6 +289,7 @@ class VoiceSessionController(
         rearmJob?.cancel()
         speechManager.stopListening()
         voiceOutput.stop()
+        _sessionMode.value = VoiceSessionMode.IDLE
         updateState(VoiceSessionState.IDLE)
     }
 
@@ -235,8 +299,14 @@ class VoiceSessionController(
     fun shutdown() {
         rearmJob?.cancel()
         handsFreeMode = false
+        _sessionMode.value = VoiceSessionMode.IDLE
         speechManager.destroyRecognizer()
         voiceOutput.shutdown()
         updateState(VoiceSessionState.IDLE)
+    }
+
+    private fun updateState(newState: VoiceSessionState) {
+        _state.value = newState
+        listeners.forEach { it.onStateChanged(newState) }
     }
 }

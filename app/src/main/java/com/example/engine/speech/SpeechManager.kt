@@ -30,12 +30,20 @@ class SpeechManager(private val context: Context) {
     val speechState: StateFlow<SpeechState> = _speechState.asStateFlow()
 
     private var speechRecognizer: SpeechRecognizer? = null
+    private var currentSessionId: Long = 0L
+
+    val currentSessionToken: Long
+        get() = currentSessionId
+
+    fun verifySessionToken(token: Long): Boolean = (token == currentSessionId)
 
     fun isAvailable(): Boolean {
         return SpeechRecognizer.isRecognitionAvailable(context)
     }
 
     fun startListening() {
+        currentSessionId++
+        val sessionId = currentSessionId
         mainHandler.post {
             if (!isAvailable()) {
                 _speechState.value = SpeechState.Unavailable
@@ -57,10 +65,12 @@ class SpeechManager(private val context: Context) {
 
                 recognizer.setRecognitionListener(object : RecognitionListener {
                     override fun onReadyForSpeech(params: Bundle?) {
+                        if (sessionId != currentSessionId) return
                         _speechState.value = SpeechState.Listening
                     }
 
                     override fun onBeginningOfSpeech() {
+                        if (sessionId != currentSessionId) return
                         _speechState.value = SpeechState.Listening
                     }
 
@@ -69,10 +79,12 @@ class SpeechManager(private val context: Context) {
                     override fun onBufferReceived(buffer: ByteArray?) {}
 
                     override fun onEndOfSpeech() {
+                        if (sessionId != currentSessionId) return
                         _speechState.value = SpeechState.Processing
                     }
 
                     override fun onError(error: Int) {
+                        if (sessionId != currentSessionId) return
                         val isTransient = (error == SpeechRecognizer.ERROR_NO_MATCH ||
                                 error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ||
                                 error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT)
@@ -82,6 +94,7 @@ class SpeechManager(private val context: Context) {
                     }
 
                     override fun onResults(results: Bundle?) {
+                        if (sessionId != currentSessionId) return
                         val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                         val text = matches?.firstOrNull()?.trim()
                         if (!text.isNullOrBlank()) {
@@ -105,26 +118,37 @@ class SpeechManager(private val context: Context) {
                 recognizer.startListening(intent)
                 _speechState.value = SpeechState.Listening
             } catch (e: Exception) {
-                _speechState.value = SpeechState.Error("Failed to initialize speech input: ${e.message}")
+                if (sessionId == currentSessionId) {
+                    _speechState.value = SpeechState.Error("Failed to initialize speech input: ${e.message}")
+                }
             }
         }
     }
 
     fun stopListening() {
         mainHandler.post {
+            currentSessionId++
             try {
                 speechRecognizer?.stopListening()
             } catch (_: Exception) {}
+            destroyRecognizerInternal()
+            _speechState.value = SpeechState.Ready
         }
     }
 
     fun resetState() {
-        _speechState.value = SpeechState.Ready
+        mainHandler.post {
+            currentSessionId++
+            destroyRecognizerInternal()
+            _speechState.value = SpeechState.Ready
+        }
     }
 
     fun destroyRecognizer() {
         mainHandler.post {
+            currentSessionId++
             destroyRecognizerInternal()
+            _speechState.value = SpeechState.Ready
         }
     }
 

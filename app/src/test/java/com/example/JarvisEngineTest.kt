@@ -1286,5 +1286,122 @@ class JarvisEngineTest {
         val plan = parser.parse("check project status and then push code")
         assertFalse(plan.continueOnFailure)
     }
+
+    // --- PASS 5A.2 TESTS: VOICE RUNTIME REGRESSION & SERIALIZATION ---
+
+    @Test
+    fun `push-to-talk error updates state to ERROR and notifies listener`() = runTest {
+        val speechManager = SpeechManager(context)
+        val fakeOutput = object : com.example.engine.voice.JarvisVoiceOutput {
+            override val state = kotlinx.coroutines.flow.MutableStateFlow<com.example.engine.voice.VoiceOutputState>(com.example.engine.voice.VoiceOutputState.Idle)
+            override fun isAvailable(): Boolean = true
+            override fun speak(text: String, onDone: (() -> Unit)?) { onDone?.invoke() }
+            override fun stop() {}
+            override fun shutdown() {}
+        }
+        val controller = com.example.engine.voice.VoiceSessionController(speechManager, fakeOutput)
+        var lastError: String? = null
+        controller.addListener(object : com.example.engine.voice.VoiceSessionListener {
+            override fun onStateChanged(state: com.example.engine.voice.VoiceSessionState) {}
+            override fun onSpeechRecognized(text: String) {}
+            override fun onError(message: String) { lastError = message }
+        })
+
+        controller.startPushToTalk()
+        assertEquals(com.example.engine.voice.VoiceSessionMode.PUSH_TO_TALK, controller.sessionMode.value)
+
+        // Simulate no match error during PTT
+        controller.handleSpeechState(com.example.engine.speech.SpeechState.Error("No speech matched. Please try again.", isTransient = true))
+
+        assertEquals(com.example.engine.voice.VoiceSessionState.ERROR, controller.state.value)
+        assertEquals("No speech matched. Please try again.", lastError)
+        assertEquals(com.example.engine.voice.VoiceSessionMode.IDLE, controller.sessionMode.value)
+    }
+
+    @Test
+    fun `hands-free mode ignores transient errors and does not enter ERROR state`() = runTest {
+        val speechManager = SpeechManager(context)
+        val fakeOutput = object : com.example.engine.voice.JarvisVoiceOutput {
+            override val state = kotlinx.coroutines.flow.MutableStateFlow<com.example.engine.voice.VoiceOutputState>(com.example.engine.voice.VoiceOutputState.Idle)
+            override fun isAvailable(): Boolean = true
+            override fun speak(text: String, onDone: (() -> Unit)?) { onDone?.invoke() }
+            override fun stop() {}
+            override fun shutdown() {}
+        }
+        val controller = com.example.engine.voice.VoiceSessionController(speechManager, fakeOutput)
+        var errorNotified = false
+        controller.addListener(object : com.example.engine.voice.VoiceSessionListener {
+            override fun onStateChanged(state: com.example.engine.voice.VoiceSessionState) {}
+            override fun onSpeechRecognized(text: String) {}
+            override fun onError(message: String) { errorNotified = true }
+        })
+
+        controller.setHandsFreeMode(true)
+        assertEquals(com.example.engine.voice.VoiceSessionMode.HANDS_FREE, controller.sessionMode.value)
+
+        // Simulate silence / timeout during hands-free
+        controller.handleSpeechState(com.example.engine.speech.SpeechState.Error("Speech input timed out.", isTransient = true))
+
+        assertFalse(errorNotified)
+        assertNotEquals(com.example.engine.voice.VoiceSessionState.ERROR, controller.state.value)
+        assertEquals(com.example.engine.voice.VoiceSessionState.IDLE, controller.state.value)
+
+        controller.setHandsFreeMode(false)
+    }
+
+    @Test
+    fun `push-to-talk takes precedence over hands-free mode`() = runTest {
+        val speechManager = SpeechManager(context)
+        val fakeOutput = object : com.example.engine.voice.JarvisVoiceOutput {
+            override val state = kotlinx.coroutines.flow.MutableStateFlow<com.example.engine.voice.VoiceOutputState>(com.example.engine.voice.VoiceOutputState.Idle)
+            override fun isAvailable(): Boolean = true
+            override fun speak(text: String, onDone: (() -> Unit)?) { onDone?.invoke() }
+            override fun stop() {}
+            override fun shutdown() {}
+        }
+        val controller = com.example.engine.voice.VoiceSessionController(speechManager, fakeOutput)
+
+        controller.setHandsFreeMode(true)
+        assertEquals(com.example.engine.voice.VoiceSessionMode.HANDS_FREE, controller.sessionMode.value)
+
+        controller.startPushToTalk()
+        assertEquals(com.example.engine.voice.VoiceSessionMode.PUSH_TO_TALK, controller.sessionMode.value)
+
+        controller.setHandsFreeMode(false)
+    }
+
+    @Test
+    fun `waiting for approval pauses recognition and disables hands-free rearm`() = runTest {
+        val speechManager = SpeechManager(context)
+        val fakeOutput = object : com.example.engine.voice.JarvisVoiceOutput {
+            override val state = kotlinx.coroutines.flow.MutableStateFlow<com.example.engine.voice.VoiceOutputState>(com.example.engine.voice.VoiceOutputState.Idle)
+            override fun isAvailable(): Boolean = true
+            override fun speak(text: String, onDone: (() -> Unit)?) { onDone?.invoke() }
+            override fun stop() {}
+            override fun shutdown() {}
+        }
+        val controller = com.example.engine.voice.VoiceSessionController(speechManager, fakeOutput)
+
+        controller.setHandsFreeMode(true)
+        controller.onWaitingForApproval("Do you want to run git push?")
+
+        assertEquals(com.example.engine.voice.VoiceSessionState.WAITING_FOR_APPROVAL, controller.state.value)
+        assertEquals(com.example.engine.voice.VoiceSessionMode.IDLE, controller.sessionMode.value)
+
+        controller.setHandsFreeMode(false)
+    }
+
+    @Test
+    fun `stale speech recognition callbacks with mismatched session token are ignored`() = runTest {
+        val speechManager = SpeechManager(context)
+        val token1 = speechManager.currentSessionToken
+        speechManager.startListening()
+        val token2 = speechManager.currentSessionToken
+        assertNotEquals(token1, token2)
+
+        // Old callback for token1 should be rejected
+        assertFalse(speechManager.verifySessionToken(token1))
+        assertTrue(speechManager.verifySessionToken(token2))
+    }
 }
 
