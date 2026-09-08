@@ -76,7 +76,7 @@ class FakeTermuxWorker(
                     message = "External app execution is disabled in Termux settings (~/.termux/termux.properties)."
                 )
             }
-            TermuxConnectionState.READY, TermuxConnectionState.UNVERIFIED, TermuxConnectionState.FAILED -> { /* Proceed */ }
+            TermuxConnectionState.READY, TermuxConnectionState.UNVERIFIED, TermuxConnectionState.VERIFYING, TermuxConnectionState.FAILED -> { /* Proceed */ }
         }
 
         if (!TermuxCommandClassifier.isExecutableAllowed(request.executablePath)) {

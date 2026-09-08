@@ -5,6 +5,7 @@ enum class TermuxConnectionState {
     TERMUX_TOO_OLD,
     TERMUX_PERMISSION_REQUIRED,
     UNVERIFIED,
+    VERIFYING,
     READY,
     SETUP_REQUIRED,
     FAILED

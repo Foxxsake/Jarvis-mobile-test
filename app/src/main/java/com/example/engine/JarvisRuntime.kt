@@ -159,7 +159,13 @@ class JarvisRuntime private constructor(val context: Context) {
             }
         })
 
-        refreshTermuxStatus()
+        runtimeScope.launch {
+            val initialStatus = termuxWorker.checkConnectionState()
+            _executionState.value = _executionState.value.copy(termuxStatus = initialStatus)
+            if (initialStatus.isInstalled && initialStatus.isPermissionGranted) {
+                probeTermuxConnection()
+            }
+        }
         refreshActiveWorkspace()
     }
 
@@ -608,10 +614,22 @@ class JarvisRuntime private constructor(val context: Context) {
         }
     }
 
+    suspend fun probeTermuxConnection(): TermuxConnectionStatus {
+        val current = _executionState.value.termuxStatus
+        val verifyingStatus = current.copy(
+            connectionState = TermuxConnectionState.VERIFYING,
+            detailMessage = "Probing Termux connection..."
+        )
+        _executionState.value = _executionState.value.copy(termuxStatus = verifyingStatus)
+
+        val result = termuxWorker.probeConnection()
+        _executionState.value = _executionState.value.copy(termuxStatus = result)
+        return result
+    }
+
     fun refreshTermuxStatus() {
         runtimeScope.launch {
-            val status = termuxWorker.checkConnectionState()
-            _executionState.value = _executionState.value.copy(termuxStatus = status)
+            probeTermuxConnection()
         }
     }
 

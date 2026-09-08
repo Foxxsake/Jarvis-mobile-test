@@ -75,7 +75,9 @@ data class JarvisUiState(
         connectionState = TermuxConnectionState.UNVERIFIED
     ),
     val activeWorkspace: Workspace? = null,
-    val lastTermuxResult: TermuxExecutionResult? = null
+    val lastTermuxResult: TermuxExecutionResult? = null,
+    val speechBackend: com.example.engine.speech.SpeechRecognizerBackend = com.example.engine.speech.SpeechRecognizerBackend.ON_DEVICE,
+    val lastSpeechError: String? = null
 )
 
 /**
@@ -168,6 +170,15 @@ class JarvisViewModel(
                 )
             }
         }
+
+        viewModelScope.launch {
+            runtime.speechManager.diagnostics.collectLatest { diag ->
+                _uiState.value = _uiState.value.copy(
+                    speechBackend = diag.backend,
+                    lastSpeechError = diag.lastErrorName
+                )
+            }
+        }
     }
 
     fun submitCommand(text: String) {
@@ -236,10 +247,7 @@ class JarvisViewModel(
     }
 
     suspend fun probeTermuxConnection(): TermuxConnectionStatus {
-        val result = termuxWorker.probeConnection()
-        _uiState.value = _uiState.value.copy(termuxStatus = result)
-        runtime.refreshTermuxStatus()
-        return result
+        return runtime.probeTermuxConnection()
     }
 
     fun toggleToolEnabled(toolId: String, enabled: Boolean) {

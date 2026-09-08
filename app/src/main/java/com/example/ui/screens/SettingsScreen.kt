@@ -37,6 +37,7 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
     val localProcessing by viewModel.localProcessingEnabled.collectAsState()
     val spokenResponses by viewModel.spokenResponsesEnabled.collectAsState()
     val handsFree by viewModel.handsFreeEnabled.collectAsState()
+    val uiState by viewModel.uiState.collectAsState()
 
     Scaffold(
         topBar = {
@@ -219,10 +220,34 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                     badgeText = "NOT ENROLLED",
                     badgeType = SettingsBadgeType.NOT_CONNECTED
                 )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Speech backend", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        uiState.speechBackend.name,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Last speech error", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        uiState.lastSpeechError ?: "None",
+                        fontWeight = FontWeight.Bold,
+                        color = if (uiState.lastSpeechError == null || uiState.lastSpeechError == "None") MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.error
+                    )
+                }
             }
 
             // TERMUX EXECUTION WORKER
-            val uiState by viewModel.uiState.collectAsState()
             val termux = uiState.termuxStatus
             val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -263,6 +288,7 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                     Text("External App Execution", style = MaterialTheme.typography.bodyMedium)
                     val (extText, extColor) = when (termux.connectionState) {
                         com.example.engine.termux.TermuxConnectionState.READY -> "READY" to MaterialTheme.colorScheme.primary
+                        com.example.engine.termux.TermuxConnectionState.VERIFYING -> "CHECKING..." to MaterialTheme.colorScheme.secondary
                         com.example.engine.termux.TermuxConnectionState.SETUP_REQUIRED -> "SETUP REQUIRED" to MaterialTheme.colorScheme.tertiary
                         com.example.engine.termux.TermuxConnectionState.FAILED -> "FAILED / CALLBACK ERROR" to MaterialTheme.colorScheme.error
                         com.example.engine.termux.TermuxConnectionState.UNVERIFIED -> "UNVERIFIED" to MaterialTheme.colorScheme.tertiary
@@ -284,6 +310,7 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                     Text("Connection State", style = MaterialTheme.typography.bodyMedium)
                     val (stateText, stateColor) = when (termux.connectionState) {
                         com.example.engine.termux.TermuxConnectionState.READY -> "READY" to MaterialTheme.colorScheme.primary
+                        com.example.engine.termux.TermuxConnectionState.VERIFYING -> "CHECKING..." to MaterialTheme.colorScheme.secondary
                         com.example.engine.termux.TermuxConnectionState.UNVERIFIED -> "UNVERIFIED" to MaterialTheme.colorScheme.tertiary
                         com.example.engine.termux.TermuxConnectionState.SETUP_REQUIRED -> "SETUP REQUIRED" to MaterialTheme.colorScheme.tertiary
                         com.example.engine.termux.TermuxConnectionState.TERMUX_NOT_INSTALLED -> "NOT INSTALLED" to MaterialTheme.colorScheme.error
@@ -334,7 +361,7 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                         }
 
                         OutlinedButton(
-                            onClick = { viewModel.refreshTermuxStatus() },
+                            onClick = { coroutineScope.launch { viewModel.probeTermuxConnection() } },
                             modifier = Modifier.weight(1f)
                         ) {
                             Text("Check Connection", style = MaterialTheme.typography.labelSmall)
@@ -343,7 +370,7 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                 } else {
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedButton(
-                        onClick = { viewModel.refreshTermuxStatus() },
+                        onClick = { coroutineScope.launch { viewModel.probeTermuxConnection() } },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("Check Connection", style = MaterialTheme.typography.labelSmall)
