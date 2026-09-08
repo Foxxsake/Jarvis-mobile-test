@@ -76,4 +76,23 @@ class ToolRegistryTest {
         assertEquals(AccessPolicy.ASK_EACH_TIME, tool?.policy)
         assertTrue(tool!!.enabled)
     }
+
+    @Test
+    fun `test unified setToolPolicy updates standard and discovered tool policy`() = runTest {
+        val testDispatcher = UnconfinedTestDispatcher(testScheduler)
+        val toolRegistry = ToolRegistry(context, fakeAppPolicyDao, ioDispatcher = testDispatcher)
+
+        val targetTool = toolRegistry.tools.value.first()
+        toolRegistry.setToolPolicy(targetTool, AccessPolicy.BLOCK)
+
+        val updated = toolRegistry.tools.value.find { it.id == targetTool.id }
+        assertNotNull(updated)
+        assertEquals(AccessPolicy.BLOCK, updated?.policy)
+        assertFalse(updated!!.enabled)
+
+        toolRegistry.setToolPolicy(targetTool, AccessPolicy.ALLOW)
+        val reEnabled = toolRegistry.tools.value.find { it.id == targetTool.id }
+        assertEquals(AccessPolicy.ALLOW, reEnabled?.policy)
+        assertTrue(reEnabled!!.enabled)
+    }
 }

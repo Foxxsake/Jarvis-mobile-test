@@ -47,6 +47,7 @@ fun HomeScreen(
     onReject: () -> Unit,
     onSelectCandidate: (ContactCandidate) -> Unit,
     onSelectDestination: (ContactDestination) -> Unit,
+    onSelectAppCandidate: (com.example.engine.Tool) -> Unit = {},
     onRequestPermission: (String) -> Unit,
     onDismissRationale: () -> Unit,
     onDismissPermanentlyDenied: () -> Unit = {},
@@ -322,7 +323,61 @@ fun HomeScreen(
                     }
                 }
 
-                if (uiState.pendingApproval != null && uiState.ambiguousCandidates == null && uiState.multipleDestinations == null) {
+                if (uiState.ambiguousAppCandidates != null) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(20.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Which app did you mean for \"${uiState.ambiguousAppQuery ?: "command"}\"?",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            uiState.ambiguousAppCandidates.forEach { candidate ->
+                                Surface(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp)
+                                        .clickable { onSelectAppCandidate(candidate) },
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surface
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Build,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = candidate.name,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                            Text(
+                                                text = candidate.description,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (uiState.pendingApproval != null && uiState.ambiguousCandidates == null && uiState.multipleDestinations == null && uiState.ambiguousAppCandidates == null) {
                     ApprovalCard(
                         command = uiState.pendingApproval,
                         pendingActionIndex = uiState.pendingActionIndex,

@@ -463,8 +463,39 @@ class CommandParser(
                     followUp = match.result.followUp,
                     requiresApproval = requiresApproval
                 )
+            } else if (match is ToolMatchOutcome.Ambiguous) {
+                return PlannedAction(
+                    action = CommandAction.OPEN_APP,
+                    category = CommandCategory.DEVICE_ACTION,
+                    targetAppOrPerson = trimmed,
+                    candidateTools = match.candidateTools,
+                    requiresApproval = false
+                )
             } else if (lower.startsWith("open ")) {
                 val target = trimmed.substring(5).trim()
+                val singleOutcome = toolMatcher.matchSingleTarget(target)
+                if (singleOutcome is ToolMatchOutcome.Ambiguous) {
+                    return PlannedAction(
+                        action = CommandAction.OPEN_APP,
+                        category = CommandCategory.DEVICE_ACTION,
+                        targetAppOrPerson = target,
+                        candidateTools = singleOutcome.candidateTools,
+                        requiresApproval = false
+                    )
+                } else if (singleOutcome is ToolMatchOutcome.Success) {
+                    val tool = singleOutcome.result.tool
+                    val requiresApproval = if (tool.policy == com.example.data.AccessPolicy.ASK_EACH_TIME) {
+                        true
+                    } else {
+                        approvalManager.requiresApproval(CommandAction.OPEN_APP, CommandCategory.DEVICE_ACTION, text)
+                    }
+                    return PlannedAction(
+                        action = CommandAction.OPEN_APP,
+                        category = CommandCategory.DEVICE_ACTION,
+                        targetAppOrPerson = tool.name,
+                        requiresApproval = requiresApproval
+                    )
+                }
                 return PlannedAction(
                     action = CommandAction.OPEN_APP,
                     category = CommandCategory.DEVICE_ACTION,
@@ -494,6 +525,14 @@ class CommandParser(
                 rawArguments = directMatch.result.followUp,
                 followUp = directMatch.result.followUp,
                 requiresApproval = requiresApproval
+            )
+        } else if (directMatch is ToolMatchOutcome.Ambiguous) {
+            return PlannedAction(
+                action = CommandAction.OPEN_APP,
+                category = CommandCategory.DEVICE_ACTION,
+                targetAppOrPerson = trimmed,
+                candidateTools = directMatch.candidateTools,
+                requiresApproval = false
             )
         }
 

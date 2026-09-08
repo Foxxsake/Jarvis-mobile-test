@@ -20,12 +20,14 @@ enum class ToolExecutionStatus {
     WORKSPACE_REQUIRED,
     COMMAND_REJECTED,
     NOT_SUPPORTED,
-    SKIPPED
+    SKIPPED,
+    AMBIGUOUS_APP
 }
 
 data class ToolExecutionResult(
     val status: ToolExecutionStatus,
-    val message: String
+    val message: String,
+    val candidateTools: List<Tool> = emptyList()
 )
 
 class ToolExecutor(
@@ -281,8 +283,28 @@ class ToolExecutor(
             return handleOpenSettings()
         }
 
-        val tool = toolRegistry.findTool(targetName)
-            ?: return ToolExecutionResult(ToolExecutionStatus.NOT_INSTALLED, "Tool or app '$targetName' is not registered or installed.")
+        if (command.candidateTools != null && command.candidateTools.size > 1) {
+            return ToolExecutionResult(
+                ToolExecutionStatus.AMBIGUOUS_APP,
+                "Multiple matching apps found for '$targetName': ${command.candidateTools.joinToString(", ") { it.name }}",
+                candidateTools = command.candidateTools
+            )
+        }
+
+        val outcome = toolRegistry.findToolOutcome(targetName)
+        val tool = when (outcome) {
+            is ToolMatchOutcome.Ambiguous -> {
+                return ToolExecutionResult(
+                    ToolExecutionStatus.AMBIGUOUS_APP,
+                    "Multiple matching apps found for '$targetName': ${outcome.candidateTools.joinToString(", ") { it.name }}",
+                    candidateTools = outcome.candidateTools
+                )
+            }
+            is ToolMatchOutcome.Success -> outcome.result.tool
+            ToolMatchOutcome.NoMatch -> {
+                return ToolExecutionResult(ToolExecutionStatus.NOT_INSTALLED, "Tool or app '$targetName' is not registered or installed.")
+            }
+        }
 
         if (tool.policy == com.example.data.AccessPolicy.BLOCK) {
             return ToolExecutionResult(ToolExecutionStatus.FAILED, "Cannot open ${tool.name} because it is blocked in JARVIS settings.")

@@ -180,6 +180,7 @@ class MainActivity : ComponentActivity() {
                                 onReject = { viewModel.rejectPending() },
                                 onSelectCandidate = { candidate -> viewModel.selectContactCandidate(candidate) },
                                 onSelectDestination = { destination -> viewModel.selectContactDestination(destination) },
+                                onSelectAppCandidate = { tool -> viewModel.selectAppCandidate(tool) },
                                 onRequestPermission = { permission ->
                                     if (permission == android.Manifest.permission.RECORD_AUDIO) {
                                         hasRequestedMicPermission = true
@@ -202,6 +203,7 @@ class MainActivity : ComponentActivity() {
                                 tools = tools,
                                 onToggleToolEnabled = { id, enabled -> viewModel.toggleToolEnabled(id, enabled) },
                                 onUpdateAppPolicy = { pkg, policy -> viewModel.updateAppPolicy(pkg, policy) },
+                                onUpdatePolicy = { tool, policy -> viewModel.updateToolPolicy(tool, policy) },
                                 onRefreshTools = { viewModel.refreshTools() },
                                 onBack = { navController.popBackStack() }
                             )

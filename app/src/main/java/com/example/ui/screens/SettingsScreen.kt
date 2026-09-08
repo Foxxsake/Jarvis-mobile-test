@@ -303,28 +303,6 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                     badgeText = "NOT CONNECTED",
                     badgeType = SettingsBadgeType.NOT_CONNECTED
                 )
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
-
-                val termuxText = when (uiState.termuxStatus.connectionState) {
-                    com.example.engine.termux.TermuxConnectionState.READY -> "CONNECTED"
-                    com.example.engine.termux.TermuxConnectionState.SETUP_REQUIRED -> "SETUP REQUIRED"
-                    com.example.engine.termux.TermuxConnectionState.TERMUX_PERMISSION_REQUIRED -> "PERMISSION REQ"
-                    com.example.engine.termux.TermuxConnectionState.TERMUX_NOT_INSTALLED -> "NOT INSTALLED"
-                    else -> "ERROR"
-                }
-                
-                val termuxBadge = when (uiState.termuxStatus.connectionState) {
-                    com.example.engine.termux.TermuxConnectionState.READY -> SettingsBadgeType.CONNECTED
-                    com.example.engine.termux.TermuxConnectionState.SETUP_REQUIRED -> SettingsBadgeType.WARNING
-                    com.example.engine.termux.TermuxConnectionState.TERMUX_PERMISSION_REQUIRED -> SettingsBadgeType.WARNING
-                    else -> SettingsBadgeType.NOT_CONNECTED
-                }
-
-                SettingsStatusBadgeRow(
-                    label = "Termux connection",
-                    badgeText = termuxText,
-                    badgeType = termuxBadge
-                )
             }
         }
     }

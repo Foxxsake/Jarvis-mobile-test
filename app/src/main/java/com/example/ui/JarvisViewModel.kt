@@ -18,6 +18,7 @@ import com.example.engine.TaskRouter
 import com.example.engine.ToolExecutionStatus
 import com.example.engine.ToolExecutor
 import com.example.engine.ToolRegistry
+import com.example.engine.ToolCommandMatcher
 import com.example.engine.speech.SpeechManager
 import com.example.engine.speech.SpeechState
 import com.example.util.PrivacyUtils
@@ -42,6 +43,8 @@ data class JarvisUiState(
     val multipleDestinationsName: String? = null,
     val multipleDestinations: List<ContactDestination>? = null,
     val pendingMessageForDestination: String? = null,
+    val ambiguousAppQuery: String? = null,
+    val ambiguousAppCandidates: List<com.example.engine.Tool>? = null,
     val permissionRationaleNeeded: String? = null,
     val permissionPermanentlyDenied: String? = null,
     val termuxStatus: com.example.engine.termux.TermuxConnectionStatus = com.example.engine.termux.TermuxConnectionStatus(
@@ -68,7 +71,7 @@ class JarvisViewModel(
     private val _uiState = MutableStateFlow(JarvisUiState())
     val uiState: StateFlow<JarvisUiState> = _uiState.asStateFlow()
 
-    private val parser = CommandParser()
+    private val parser = CommandParser(toolMatcher = ToolCommandMatcher { toolRegistry.tools.value })
     private val taskRouter = TaskRouter(toolRegistry)
 
     val localProcessingEnabled: StateFlow<Boolean> = settingsManager.localProcessingFlow.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, true)
@@ -131,6 +134,16 @@ class JarvisViewModel(
         val plan = parser.parse(text)
         
         viewModelScope.launch {
+            if (plan.actions.size == 1 && plan.actions[0].action == CommandAction.OPEN_APP && plan.actions[0].candidateTools != null && plan.actions[0].candidateTools!!.size > 1) {
+                _uiState.value = _uiState.value.copy(
+                    status = "Select app",
+                    pendingApproval = plan,
+                    ambiguousAppQuery = plan.actions[0].targetAppOrPerson,
+                    ambiguousAppCandidates = plan.actions[0].candidateTools
+                )
+                return@launch
+            }
+
             if (plan.actions.size == 1 && (plan.actions[0].action == CommandAction.CALL || plan.actions[0].action == CommandAction.TEXT || plan.actions[0].action == CommandAction.EMAIL)) {
                 val resolution = contactResolver.resolveCommandTarget(plan.actions[0])
                 handleContactResolution(plan, resolution)
@@ -310,6 +323,8 @@ class JarvisViewModel(
             resolvedContact = null,
             ambiguousCandidates = null,
             ambiguousQuery = null,
+            ambiguousAppCandidates = null,
+            ambiguousAppQuery = null,
             multipleDestinations = null,
             multipleDestinationsName = null,
             permissionRationaleNeeded = null
@@ -411,6 +426,17 @@ class JarvisViewModel(
                 result.message
             )
 
+            if (result.status == ToolExecutionStatus.AMBIGUOUS_APP) {
+                _uiState.value = _uiState.value.copy(
+                    status = "Select app",
+                    pendingApproval = currentPlan,
+                    pendingActionIndex = i,
+                    ambiguousAppQuery = action.targetAppOrPerson,
+                    ambiguousAppCandidates = result.candidateTools
+                )
+                return
+            }
+
             val isSuccess = result.status == ToolExecutionStatus.SUCCESS
             if (!isSuccess && !currentPlan.continueOnFailure) {
                 skipRemainingActions(currentPlan, i + 1, "Previous action '${action.action.name}' failed (${result.status.name})")
@@ -420,6 +446,37 @@ class JarvisViewModel(
         }
 
         _uiState.value = _uiState.value.copy(status = "Ready", pendingApproval = null, planToApprove = null)
+    }
+
+    fun selectAppCandidate(tool: com.example.engine.Tool) {
+        val pending = _uiState.value.pendingApproval ?: return
+        val currentIndex = _uiState.value.pendingActionIndex
+        if (currentIndex !in pending.actions.indices) return
+
+        val currentAction = pending.actions[currentIndex]
+        val requiresApproval = (tool.policy == com.example.data.AccessPolicy.ASK_EACH_TIME)
+        val updatedAction = currentAction.copy(
+            targetAppOrPerson = tool.name,
+            requiresApproval = requiresApproval,
+            candidateTools = null
+        )
+        val updatedActions = pending.actions.toMutableList()
+        updatedActions[currentIndex] = updatedAction
+        val updatedPlan = pending.copy(actions = updatedActions)
+
+        _uiState.value = _uiState.value.copy(
+            ambiguousAppCandidates = null,
+            ambiguousAppQuery = null,
+            status = if (requiresApproval) "Waiting for approval: ${tool.name}" else "Launching ${tool.name}...",
+            planToApprove = if (requiresApproval) "Launch ${tool.name}\nAccess Policy: ASK_EACH_TIME" else null,
+            pendingApproval = if (requiresApproval) updatedPlan else null
+        )
+
+        if (!requiresApproval) {
+            viewModelScope.launch {
+                executePlan(updatedPlan, startIndex = currentIndex)
+            }
+        }
     }
 
     private suspend fun resolveCommandProposal(action: PlannedAction): com.example.engine.CommandProposal? {
@@ -477,6 +534,21 @@ class JarvisViewModel(
     fun toggleToolEnabled(toolId: String, enabled: Boolean) {
         viewModelScope.launch {
             settingsManager.setToolEnabled(toolId, enabled)
+            val tool = toolRegistry.tools.value.firstOrNull { it.id == toolId }
+            if (tool != null) {
+                val policy = if (enabled) com.example.data.AccessPolicy.ALLOW else com.example.data.AccessPolicy.BLOCK
+                toolRegistry.setToolPolicy(tool, policy)
+            }
+            refreshTools()
+        }
+    }
+
+    fun updateToolPolicy(tool: com.example.engine.Tool, policy: com.example.data.AccessPolicy) {
+        viewModelScope.launch {
+            toolRegistry.setToolPolicy(tool, policy)
+            val enabled = (policy != com.example.data.AccessPolicy.BLOCK)
+            settingsManager.setToolEnabled(tool.id, enabled)
+            refreshTools()
         }
     }
 

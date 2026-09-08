@@ -44,7 +44,8 @@ data class PlannedAction(
     val continueOnFailure: Boolean = false,
     val riskLevel: TermuxRiskLevel? = null,
     val state: ActionExecutionState = ActionExecutionState.PENDING,
-    val proposal: CommandProposal? = null
+    val proposal: CommandProposal? = null,
+    val candidateTools: List<Tool>? = null
 ) {
     val executionState: ActionExecutionState get() = state
 }

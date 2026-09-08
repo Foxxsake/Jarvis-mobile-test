@@ -137,16 +137,32 @@ class ToolRegistry(
         appPolicyDao.insertPolicy(AppPolicy(packageName, policy))
     }
 
-    fun findTool(query: String): Tool? {
+    suspend fun setToolPolicy(tool: Tool, policy: AccessPolicy) {
+        // Persist policy by tool ID
+        appPolicyDao.insertPolicy(AppPolicy(tool.id, policy))
+        // Persist policy by installed package name if present
+        tool.installedPackageName?.let { pkg ->
+            appPolicyDao.insertPolicy(AppPolicy(pkg, policy))
+        }
+        // Persist policy by declared package names
+        for (pkg in tool.packageNames) {
+            appPolicyDao.insertPolicy(AppPolicy(pkg, policy))
+        }
+    }
+
+    fun findToolOutcome(query: String): ToolMatchOutcome {
         val clean = query.trim()
-        if (clean.isBlank()) return null
+        if (clean.isBlank()) return ToolMatchOutcome.NoMatch
 
         val currentList = _tools.value
-        val outcome = toolMatcher.matchSingleTarget(clean, currentList)
+        return toolMatcher.matchSingleTarget(clean, currentList)
+    }
+
+    fun findTool(query: String): Tool? {
+        val outcome = findToolOutcome(query)
         if (outcome is ToolMatchOutcome.Success) {
             return outcome.result.tool
         }
-
         return null
     }
 

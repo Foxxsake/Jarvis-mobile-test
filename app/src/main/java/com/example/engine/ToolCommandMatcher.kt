@@ -102,16 +102,11 @@ class ToolCommandMatcher(
         val tools = toolsProvider()
 
         // 1. Direct Exact Match on the entire cleaned phrase (no follow-up)
-        val directExact = findExactTool(cleaned, tools)
-        if (directExact != null) {
-            return ToolMatchOutcome.Success(
-                ToolMatchResult(
-                    tool = directExact.first,
-                    matchedTerm = directExact.second,
-                    followUp = null,
-                    matchType = ToolMatchResult.MatchType.EXACT
-                )
-            )
+        val directExact = findExactMatchesOutcome(cleaned, tools)
+        if (directExact is ToolMatchOutcome.Success) {
+            return directExact
+        } else if (directExact is ToolMatchOutcome.Ambiguous) {
+            return directExact
         }
 
         // 2. Direct Normalized Match on the entire cleaned phrase
@@ -124,8 +119,10 @@ class ToolCommandMatcher(
 
         // 3. Known tool prefix match (e.g., "Pydroid 3 and start coding", "Pydroid start coding")
         val prefixMatch = findToolByPrefix(cleaned, tools)
-        if (prefixMatch != null) {
-            return ToolMatchOutcome.Success(prefixMatch)
+        if (prefixMatch is ToolMatchOutcome.Success) {
+            return prefixMatch
+        } else if (prefixMatch is ToolMatchOutcome.Ambiguous) {
+            return prefixMatch
         }
 
         // 4. Conjunction split (e.g., "Pyroid and start coding", "Git Hub and start coding")
@@ -147,7 +144,7 @@ class ToolCommandMatcher(
             }
         }
 
-        // 5. Single target fuzzy match on cleaned phrase
+        // 5. Single target matching on cleaned phrase (word matches, fuzzy)
         return matchSingleTarget(cleaned, tools)
     }
 
@@ -156,18 +153,17 @@ class ToolCommandMatcher(
      * Order of precedence:
      * 1. Exact alias/name match
      * 2. Normalized exact match (e.g. "Git Hub" -> "GitHub")
-     * 3. Conservative, unique fuzzy match (e.g. "Pyroid" -> "Pydroid")
+     * 3. Word-level / generic name match (e.g. "calculator" -> "Samsung Calculator", "Google Calculator")
+     * 4. Conservative, unique fuzzy match (e.g. "Pyroid" -> "Pydroid")
      */
     fun matchSingleTarget(query: String, tools: List<Tool> = toolsProvider()): ToolMatchOutcome {
         val clean = query.trim()
         if (clean.isBlank()) return ToolMatchOutcome.NoMatch
 
         // 1. Exact match
-        val exact = findExactTool(clean, tools)
-        if (exact != null) {
-            return ToolMatchOutcome.Success(
-                ToolMatchResult(exact.first, exact.second, null, ToolMatchResult.MatchType.EXACT)
-            )
+        val exact = findExactMatchesOutcome(clean, tools)
+        if (exact !is ToolMatchOutcome.NoMatch) {
+            return exact
         }
 
         // 2. Normalized match
@@ -176,20 +172,89 @@ class ToolCommandMatcher(
             return norm
         }
 
-        // 3. Conservative Fuzzy match
+        // 3. Word-level / generic term match
+        val wordMatch = findWordMatches(clean, tools)
+        if (wordMatch !is ToolMatchOutcome.NoMatch) {
+            return wordMatch
+        }
+
+        // 4. Conservative Fuzzy match
         return findFuzzyTool(clean, tools)
     }
 
-    private fun findExactTool(query: String, tools: List<Tool>): Pair<Tool, String>? {
+    private fun findExactMatchesOutcome(query: String, tools: List<Tool>): ToolMatchOutcome {
         val lower = query.lowercase()
+        val matches = mutableListOf<Pair<Tool, String>>()
         for (tool in tools) {
-            if (tool.name.lowercase() == lower) return Pair(tool, tool.name)
-            if (tool.id.lowercase() == lower) return Pair(tool, tool.id)
-            for (alias in tool.aliases) {
-                if (alias.lowercase() == lower) return Pair(tool, alias)
+            if (tool.name.lowercase() == lower) {
+                matches.add(Pair(tool, tool.name))
+            } else if (tool.id.lowercase() == lower) {
+                matches.add(Pair(tool, tool.id))
+            } else {
+                for (alias in tool.aliases) {
+                    if (alias.lowercase() == lower) {
+                        matches.add(Pair(tool, alias))
+                        break
+                    }
+                }
             }
         }
-        return null
+
+        val distinctTools = matches.map { it.first }.distinctBy { it.id }
+        return resolveMatchesOutcome(matches, ToolMatchResult.MatchType.EXACT)
+    }
+
+    private fun resolveMatchesOutcome(
+        matches: List<Pair<Tool, String>>,
+        matchType: ToolMatchResult.MatchType
+    ): ToolMatchOutcome {
+        if (matches.isEmpty()) return ToolMatchOutcome.NoMatch
+
+        val distinctTools = matches.map { it.first }.distinctBy { it.id }
+        val activeTools = distinctTools.filter { it.enabled && it.policy != com.example.data.AccessPolicy.BLOCK }
+
+        return when {
+            activeTools.size == 1 -> {
+                val target = activeTools.first()
+                val matchedTerm = matches.first { it.first.id == target.id }.second
+                ToolMatchOutcome.Success(
+                    ToolMatchResult(target, matchedTerm, null, matchType)
+                )
+            }
+            activeTools.size > 1 -> ToolMatchOutcome.Ambiguous(activeTools)
+            distinctTools.size == 1 -> {
+                val target = distinctTools.first()
+                val matchedTerm = matches.first { it.first.id == target.id }.second
+                ToolMatchOutcome.Success(
+                    ToolMatchResult(target, matchedTerm, null, matchType)
+                )
+            }
+            distinctTools.isNotEmpty() -> ToolMatchOutcome.Ambiguous(distinctTools)
+            else -> ToolMatchOutcome.NoMatch
+        }
+    }
+
+    private fun findWordMatches(query: String, tools: List<Tool>): ToolMatchOutcome {
+        val q = query.lowercase().trim()
+        if (q.length < 3) return ToolMatchOutcome.NoMatch
+
+        val matches = mutableListOf<Pair<Tool, String>>()
+        for (tool in tools) {
+            val nameWords = tool.name.lowercase().split(Regex("[\\s\\-_]+")).filter { it.isNotBlank() }
+            val aliasWords = tool.aliases.flatMap { it.lowercase().split(Regex("[\\s\\-_]+")) }.filter { it.isNotBlank() }
+            
+            // Check if any word equals query or query matches tool name
+            if (nameWords.any { it == q } || tool.name.lowercase() == q) {
+                matches.add(Pair(tool, tool.name))
+            } else if (aliasWords.any { it == q }) {
+                val matchedAlias = tool.aliases.firstOrNull { it.lowercase().split(Regex("[\\s\\-_]+")).contains(q) } ?: tool.name
+                matches.add(Pair(tool, matchedAlias))
+            } else if (tool.name.lowercase().contains(q) && q.length >= 4) {
+                matches.add(Pair(tool, tool.name))
+            }
+        }
+
+        return resolveMatchesOutcome(matches, ToolMatchResult.MatchType.NORMALIZED)
     }
 
     private fun findNormalizedTool(query: String, tools: List<Tool>): ToolMatchOutcome {
@@ -217,17 +282,10 @@ class ToolCommandMatcher(
             }
         }
 
-        val distinctTools = matches.map { it.first }.distinctBy { it.id }
-        return when {
-            distinctTools.size == 1 -> ToolMatchOutcome.Success(
-                ToolMatchResult(matches.first().first, matches.first().second, null, ToolMatchResult.MatchType.NORMALIZED)
-            )
-            distinctTools.size > 1 -> ToolMatchOutcome.Ambiguous(distinctTools)
-            else -> ToolMatchOutcome.NoMatch
-        }
+        return resolveMatchesOutcome(matches, ToolMatchResult.MatchType.NORMALIZED)
     }
 
-    private fun findToolByPrefix(cleanedPhrase: String, tools: List<Tool>): ToolMatchResult? {
+    private fun findToolByPrefix(cleanedPhrase: String, tools: List<Tool>): ToolMatchOutcome? {
         val lowerPhrase = cleanedPhrase.lowercase()
 
         // Collect all (tool, candidateTerm) pairs sorted by term length descending
@@ -241,24 +299,43 @@ class ToolCommandMatcher(
         }
         candidates.sortByDescending { it.second.length }
 
+        val matches = mutableListOf<Pair<Tool, String>>()
+        var longestMatchLen = 0
+
         for ((tool, term) in candidates) {
             val termLower = term.lowercase()
             if (lowerPhrase.startsWith(termLower)) {
                 // Must have word boundary or end of string
                 if (lowerPhrase.length == termLower.length || lowerPhrase[termLower.length].isWhitespace() || lowerPhrase[termLower.length] == ',') {
-                    val rawAfter = cleanedPhrase.substring(term.length).trim()
-                    val followUp = cleanFollowUp(rawAfter)
-                    return ToolMatchResult(
-                        tool = tool,
-                        matchedTerm = term,
-                        followUp = followUp,
-                        matchType = ToolMatchResult.MatchType.EXACT
-                    )
+                    if (termLower.length > longestMatchLen) {
+                        longestMatchLen = termLower.length
+                        matches.clear()
+                        matches.add(Pair(tool, term))
+                    } else if (termLower.length == longestMatchLen) {
+                        matches.add(Pair(tool, term))
+                    }
                 }
             }
         }
 
-        return null
+        val distinctTools = matches.map { it.first }.distinctBy { it.id }
+        return when {
+            distinctTools.size == 1 -> {
+                val match = matches.first()
+                val rawAfter = cleanedPhrase.substring(match.second.length).trim()
+                val followUp = cleanFollowUp(rawAfter)
+                ToolMatchOutcome.Success(
+                    ToolMatchResult(
+                        tool = match.first,
+                        matchedTerm = match.second,
+                        followUp = followUp,
+                        matchType = ToolMatchResult.MatchType.EXACT
+                    )
+                )
+            }
+            distinctTools.size > 1 -> ToolMatchOutcome.Ambiguous(distinctTools)
+            else -> null
+        }
     }
 
     private fun cleanFollowUp(rawAfter: String): String? {
