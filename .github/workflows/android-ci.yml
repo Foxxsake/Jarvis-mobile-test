@@ -5,15 +5,20 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: write
+      
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
     
-    - name: set up JDK 17
+    - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
@@ -23,14 +28,27 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
       
-    - name: Build with Gradle
+    - name: Build debug APK with Gradle
       run: ./gradlew assembleDebug --no-daemon
       
-    - name: Run Tests
+    - name: Run Unit Tests
       run: ./gradlew testDebugUnitTest --no-daemon
       
-    - name: Upload Artifact
+    - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: app-debug
+        name: JARVIS-Mobile-Debug-APK
         path: app/build/outputs/apk/debug/app-debug.apk
+        
+    - name: Create Pre-release for Phone Download
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: nightly-dev
+        name: Development Build (Nightly)
+        body: |
+          Automated build from the latest code.
+          Download the APK below and install it directly on your Android phone.
+        prerelease: true
+        files: app/build/outputs/apk/debug/app-debug.apk
+
