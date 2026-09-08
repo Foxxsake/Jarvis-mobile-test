@@ -335,20 +335,13 @@ class CommandParser(
 
         if (lower.startsWith("build ")) {
             val arg = trimmed.substring(6).trim()
-            val proposal = CommandProposal(
-                tool = "Termux",
-                workspace = "Active Workspace",
-                command = "build $arg",
-                riskLevel = TermuxRiskLevel.MUTATING,
-                reason = "Build command: $arg"
-            )
             return PlannedAction(
                 action = CommandAction.BUILD,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = arg,
                 riskLevel = TermuxRiskLevel.MUTATING,
-                requiresApproval = true,
-                proposal = proposal
+                requiresApproval = false,
+                proposal = null
             )
         }
 
@@ -357,7 +350,8 @@ class CommandParser(
                 action = CommandAction.WORK_ON,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = trimmed.substring(8).trim(),
-                requiresApproval = approvalManager.requiresApproval(CommandAction.WORK_ON, CommandCategory.DEVELOPMENT, text)
+                requiresApproval = false,
+                proposal = null
             )
         }
 
@@ -381,59 +375,39 @@ class CommandParser(
 
         if (lower.startsWith("delete ")) {
             val arg = trimmed.substring(7).trim()
-            val proposal = CommandProposal(
-                tool = "Termux",
-                workspace = "Active Workspace",
-                command = "rm -rf $arg",
-                riskLevel = TermuxRiskLevel.DESTRUCTIVE,
-                reason = "Permanently delete files or directories"
-            )
             return PlannedAction(
                 action = CommandAction.DELETE,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = arg,
                 riskLevel = TermuxRiskLevel.DESTRUCTIVE,
                 requiresApproval = true,
-                proposal = proposal
+                proposal = null
             )
         }
 
         if (lower.startsWith("overwrite ")) {
             val arg = trimmed.substring(10).trim()
-            val proposal = CommandProposal(
-                tool = "Termux",
-                workspace = "Active Workspace",
-                command = "overwrite $arg",
-                riskLevel = TermuxRiskLevel.DESTRUCTIVE,
-                reason = "Overwrite existing content"
-            )
             return PlannedAction(
                 action = CommandAction.OVERWRITE,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = arg,
                 riskLevel = TermuxRiskLevel.DESTRUCTIVE,
                 requiresApproval = true,
-                proposal = proposal
+                proposal = null
             )
         }
 
         if (lower.startsWith("run ")) {
             val arg = trimmed.substring(4).trim()
             val risk = TermuxCommandClassifier.classifyCommandLine(arg)
-            val proposal = CommandProposal(
-                tool = "Termux",
-                workspace = "Active Workspace",
-                command = arg,
-                riskLevel = risk,
-                reason = "Explicit shell command execution"
-            )
+            val requiresApproval = TermuxCommandClassifier.requiresApproval(risk)
             return PlannedAction(
                 action = CommandAction.RUN_COMMAND,
                 category = CommandCategory.DEVELOPMENT,
                 rawArguments = arg,
                 riskLevel = risk,
-                requiresApproval = true,
-                proposal = proposal
+                requiresApproval = requiresApproval,
+                proposal = null
             )
         }
 

@@ -124,7 +124,8 @@ class MainActivity : ComponentActivity() {
                                     voiceOutput = voiceOutput,
                                     injectedVoiceSessionController = runtime.voiceSessionController,
                                     termuxWorker = termuxWorker,
-                                    workspaceRegistry = workspaceRegistry
+                                    workspaceRegistry = workspaceRegistry,
+                                    runtime = runtime
                                 ) as T
                             }
                         }

@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.map
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
-class SettingsManager(private val context: Context) {
+class SettingsManager(val context: Context) {
     companion object {
         val CONFIRMATION_REQUIRED = booleanPreferencesKey("confirmation_required")
         val LOCAL_PROCESSING = booleanPreferencesKey("local_processing")

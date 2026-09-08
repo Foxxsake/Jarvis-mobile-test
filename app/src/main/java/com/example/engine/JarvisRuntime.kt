@@ -1,15 +1,26 @@
 package com.example.engine
 
 import android.content.Context
+import com.example.data.AccessPolicy
 import com.example.data.ActivityRepository
 import com.example.data.AppDatabase
 import com.example.data.SettingsManager
 import com.example.data.workspace.LocalWorkspaceRegistry
+import com.example.data.workspace.Workspace
 import com.example.data.workspace.WorkspaceRegistry
+import com.example.engine.audio.AudioSessionManager
 import com.example.engine.contacts.AndroidContactsProvider
+import com.example.engine.contacts.ContactCandidate
+import com.example.engine.contacts.ContactDestination
 import com.example.engine.contacts.ContactResolutionResult
+import com.example.engine.policy.ExecutionPolicyGuard
+import com.example.engine.policy.PolicyDecision
 import com.example.engine.speech.SpeechManager
 import com.example.engine.termux.AndroidTermuxWorker
+import com.example.engine.termux.TermuxCommandClassifier
+import com.example.engine.termux.TermuxConnectionState
+import com.example.engine.termux.TermuxConnectionStatus
+import com.example.engine.termux.TermuxExecutionResult
 import com.example.engine.termux.TermuxWorker
 import com.example.engine.voice.AndroidVoiceOutput
 import com.example.engine.voice.JarvisSpeechFormatter
@@ -27,6 +38,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class RuntimeExecutionState(
     val status: String = "Ready",
@@ -34,22 +47,41 @@ data class RuntimeExecutionState(
     val pendingActionIndex: Int = 0,
     val planToApprove: String? = null,
     val resolvedContact: ContactResolutionResult.Resolved? = null,
+    val ambiguousQuery: String? = null,
+    val ambiguousCandidates: List<ContactCandidate>? = null,
+    val multipleDestinationsName: String? = null,
+    val multipleDestinations: List<ContactDestination>? = null,
+    val pendingMessageForDestination: String? = null,
+    val ambiguousAppQuery: String? = null,
+    val ambiguousAppCandidates: List<Tool>? = null,
     val permissionRationaleNeeded: String? = null,
-    val lastRecognizedText: String = ""
+    val permissionPermanentlyDenied: String? = null,
+    val lastRecognizedText: String = "",
+    val speechEventId: Long = 0L,
+    val termuxStatus: TermuxConnectionStatus = TermuxConnectionStatus(
+        isInstalled = false,
+        isPermissionGranted = false,
+        isExternalAppsAllowed = false,
+        connectionState = TermuxConnectionState.UNVERIFIED
+    ),
+    val activeWorkspace: Workspace? = null,
+    val lastTermuxResult: TermuxExecutionResult? = null
 )
 
 /**
- * Application-scoped runtime coordinator for JARVIS.
- * Provides the single source of truth for:
- * - Command parsing and execution
- * - ToolRegistry and App Policies
- * - Safety & Approval management
- * - Contacts & Termux coordination
- * - Speech recognition and Voice output lifecycle
+ * Application-scoped runtime coordinator and single source of truth for JARVIS.
+ * Coordinates:
+ * - Single Command Engine & Serialized Execution
+ * - ToolRegistry & Access Policy evaluation
+ * - Final Execution Policy Guard & Safety rules
+ * - Contacts Resolution and Ambiguous App handling
+ * - AudioSessionManager, Speech recognition, and Voice output lifecycle
+ * - Activity logging with Privacy Redaction and Bounded Retention
  */
 class JarvisRuntime private constructor(val context: Context) {
 
     val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val executionMutex = Mutex()
 
     val database: AppDatabase = AppDatabase.getDatabase(context)
     val activityRepository: ActivityRepository = ActivityRepository(database.activityLogDao())
@@ -68,12 +100,14 @@ class JarvisRuntime private constructor(val context: Context) {
         workspaceRegistry = workspaceRegistry
     )
 
+    val audioSessionManager: AudioSessionManager = AudioSessionManager()
     val speechManager: SpeechManager = SpeechManager(context)
     val voiceOutput: JarvisVoiceOutput = AndroidVoiceOutput(context)
 
     val voiceSessionController: VoiceSessionController = VoiceSessionController(
         speechManager = speechManager,
-        voiceOutput = voiceOutput
+        voiceOutput = voiceOutput,
+        audioSessionManager = audioSessionManager
     )
 
     val parser: CommandParser = CommandParser(toolMatcher = ToolCommandMatcher { toolRegistry.tools.value })
@@ -83,7 +117,7 @@ class JarvisRuntime private constructor(val context: Context) {
     val executionState: StateFlow<RuntimeExecutionState> = _executionState.asStateFlow()
 
     init {
-        // Collect spoken responses setting
+        // Collect spoken responses setting into voice session controller
         runtimeScope.launch {
             settingsManager.spokenResponsesFlow.collectLatest { enabled ->
                 voiceSessionController.setSpokenResponsesEnabled(enabled)
@@ -97,11 +131,11 @@ class JarvisRuntime private constructor(val context: Context) {
             }
         }
 
-        // Default listener on voiceSessionController to execute recognized commands
-        voiceSessionController.setListener(object : VoiceSessionListener {
+        // Install permanent application listener on voiceSessionController
+        voiceSessionController.addListener(object : VoiceSessionListener {
             override fun onStateChanged(state: VoiceSessionState) {
                 val statusText = when (state) {
-                    VoiceSessionState.IDLE -> "Ready"
+                    VoiceSessionState.IDLE -> if (_executionState.value.pendingApproval != null) "Waiting for approval" else "Ready"
                     VoiceSessionState.LISTENING -> "Listening..."
                     VoiceSessionState.TRANSCRIBING -> "Processing speech..."
                     VoiceSessionState.PROCESSING -> "Processing..."
@@ -113,7 +147,10 @@ class JarvisRuntime private constructor(val context: Context) {
             }
 
             override fun onSpeechRecognized(text: String) {
-                _executionState.value = _executionState.value.copy(lastRecognizedText = text)
+                _executionState.value = _executionState.value.copy(
+                    lastRecognizedText = text,
+                    speechEventId = System.currentTimeMillis()
+                )
                 executeCommand(text)
             }
 
@@ -121,40 +158,88 @@ class JarvisRuntime private constructor(val context: Context) {
                 _executionState.value = _executionState.value.copy(status = "Error: $message")
             }
         })
+
+        refreshTermuxStatus()
+        refreshActiveWorkspace()
     }
 
     fun executeCommand(text: String) {
         if (text.isBlank()) return
-        val plan = parser.parse(text)
 
         runtimeScope.launch {
-            val isLocalOnly = settingsManager.localProcessingFlow.firstOrNull() ?: true
+            executionMutex.withLock {
+                // Safeguard: Protect active pending approvals from being overwritten
+                if (_executionState.value.pendingApproval != null) {
+                    _executionState.value = _executionState.value.copy(
+                        status = "Action pending approval. Please approve or reject first."
+                    )
+                    voiceSessionController.speakResponse("Please resolve the pending approval first.")
+                    return@launch
+                }
 
-            // 1. Ambiguous App
-            if (plan.actions.size == 1 && plan.actions[0].action == CommandAction.OPEN_APP &&
-                plan.actions[0].candidateTools != null && plan.actions[0].candidateTools!!.size > 1
-            ) {
-                _executionState.value = _executionState.value.copy(
-                    status = "Select app",
-                    pendingApproval = plan
-                )
-                voiceSessionController.speakResponse("Multiple apps matched. Please select on screen.")
-                return@launch
+                val plan = parser.parse(text)
+                val isLocalOnly = kotlinx.coroutines.withTimeoutOrNull(200) { settingsManager.localProcessingFlow.firstOrNull() } ?: true
+
+                // 1. Ambiguous App Check
+                if (plan.actions.size == 1 && plan.actions[0].action == CommandAction.OPEN_APP &&
+                    plan.actions[0].candidateTools != null && plan.actions[0].candidateTools!!.size > 1
+                ) {
+                    _executionState.value = _executionState.value.copy(
+                        status = "Select app",
+                        pendingApproval = plan,
+                        ambiguousAppQuery = plan.actions[0].targetAppOrPerson,
+                        ambiguousAppCandidates = plan.actions[0].candidateTools
+                    )
+                    voiceSessionController.speakResponse("Multiple apps matched. Please select on screen.")
+                    return@launch
+                }
+
+                // 2. Single Communication Action Resolution
+                if (plan.actions.size == 1 && (plan.actions[0].action == CommandAction.CALL ||
+                            plan.actions[0].action == CommandAction.TEXT ||
+                            plan.actions[0].action == CommandAction.EMAIL)
+                ) {
+                    val resolution = contactResolver.resolveCommandTarget(plan.actions[0])
+                    handleContactResolution(plan, resolution)
+                    return@launch
+                }
+
+                // 3. Resolve dynamic command proposals (e.g. tests / builds / workspaces)
+                val resolvedPlan = resolveDynamicProposals(plan)
+
+                // 4. Sequential execution pipeline
+                executePlanInternal(resolvedPlan, startIndex = 0, isLocalOnly = isLocalOnly)
             }
-
-            // 2. Contact resolution
-            if (plan.actions.size == 1 && (plan.actions[0].action == CommandAction.CALL ||
-                        plan.actions[0].action == CommandAction.TEXT ||
-                        plan.actions[0].action == CommandAction.EMAIL)
-            ) {
-                val resolution = contactResolver.resolveCommandTarget(plan.actions[0])
-                handleContactResolution(plan, resolution)
-                return@launch
-            }
-
-            // 3. Sequential plan execution
-            executePlanInternal(plan, startIndex = 0, isLocalOnly = isLocalOnly)
         }
+    }
+
+    private fun resolveDynamicProposals(plan: CommandPlan): CommandPlan {
+        val updatedActions = plan.actions.map { action ->
+            if (action.action == CommandAction.TERMUX_COMMAND && action.proposal == null) {
+                val workspace = workspaceRegistry.getActiveWorkspace()
+                val wsName = workspace?.displayName ?: "No Workspace"
+                val raw = action.rawArguments?.lowercase() ?: ""
+                val (cmd, reason) = when {
+                    raw.contains("test") -> "./gradlew test" to "Run project tests"
+                    raw.contains("build") -> "./gradlew assembleDebug" to "Build project"
+                    else -> (action.rawArguments ?: "") to "Execute Termux command"
+                }
+                val risk = TermuxCommandClassifier.classifyCommandLine(cmd)
+                action.copy(
+                    proposal = CommandProposal(
+                        tool = "Termux",
+                        workspace = wsName,
+                        command = cmd,
+                        riskLevel = risk,
+                        reason = reason
+                    ),
+                    riskLevel = risk
+                )
+            } else {
+                action
+            }
+        }
+        return plan.copy(actions = updatedActions)
     }
 
     private suspend fun handleContactResolution(plan: CommandPlan, resolution: ContactResolutionResult) {
@@ -175,14 +260,19 @@ class JarvisRuntime private constructor(val context: Context) {
             is ContactResolutionResult.Ambiguous -> {
                 _executionState.value = _executionState.value.copy(
                     status = "Select contact",
-                    pendingApproval = plan
+                    pendingApproval = plan,
+                    ambiguousQuery = resolution.query,
+                    ambiguousCandidates = resolution.candidates
                 )
                 voiceSessionController.speakResponse("Multiple matching contacts found. Please select on screen.")
             }
             is ContactResolutionResult.MultipleDestinations -> {
                 _executionState.value = _executionState.value.copy(
                     status = "Select phone number/email",
-                    pendingApproval = plan
+                    pendingApproval = plan,
+                    multipleDestinationsName = resolution.displayName,
+                    multipleDestinations = resolution.destinations,
+                    pendingMessageForDestination = resolution.message
                 )
                 voiceSessionController.speakResponse("Multiple numbers or addresses found. Please choose on screen.")
             }
@@ -222,40 +312,70 @@ class JarvisRuntime private constructor(val context: Context) {
         plan: CommandPlan,
         startIndex: Int = 0,
         resolvedContact: ContactResolutionResult.Resolved? = null,
-        isLocalOnly: Boolean = true
+        isLocalOnly: Boolean = true,
+        isApprovedByUser: Boolean = false
     ) {
         var currentPlan = plan
         for (i in startIndex until currentPlan.actions.size) {
             val action = currentPlan.actions[i]
 
-            // Action-by-action approval check
-            if (action.requiresApproval && action.state != ActionExecutionState.RUNNING) {
-                val proposal = action.proposal
-                val details = buildString {
-                    if (currentPlan.actions.size > 1) {
-                        appendLine("Action ${i + 1} of ${currentPlan.actions.size}: ${action.action.name}")
-                    }
-                    if (proposal != null) {
-                        appendLine("Command: ${proposal.command}")
-                        appendLine("Tool: ${proposal.tool}")
-                        val ws = workspaceRegistry.getActiveWorkspace()?.displayName ?: proposal.workspace
-                        appendLine("Workspace: $ws")
-                        appendLine("Risk: ${proposal.riskLevel.name}")
-                        appendLine("Reason: ${proposal.reason}")
-                    } else if (!action.rawArguments.isNullOrBlank()) {
-                        appendLine("Arguments: ${action.rawArguments}")
-                    }
-                }.trim()
+            // Final Execution Safety & Policy Guard Check
+            val policyDecision = ExecutionPolicyGuard.evaluate(
+                action = action,
+                toolRegistry = toolRegistry,
+                isApprovedByUser = (isApprovedByUser && i == startIndex) || action.state == ActionExecutionState.RUNNING
+            )
 
-                _executionState.value = _executionState.value.copy(
-                    status = "Waiting for approval: ${action.action.name}",
-                    pendingApproval = currentPlan,
-                    pendingActionIndex = i,
-                    planToApprove = details
-                )
-                val approvalPrompt = JarvisSpeechFormatter.formatApprovalPrompt(currentPlan, details)
-                voiceSessionController.onWaitingForApproval(approvalPrompt)
-                return // Pause execution until user approves
+            when (policyDecision) {
+                is PolicyDecision.Blocked -> {
+                    logActivity(
+                        currentPlan.originalText,
+                        action,
+                        "Policy Guard",
+                        ToolExecutionStatus.COMMAND_REJECTED.name,
+                        policyDecision.reason
+                    )
+                    _executionState.value = _executionState.value.copy(
+                        status = "Action Blocked: ${policyDecision.reason}",
+                        pendingApproval = null,
+                        planToApprove = null
+                    )
+                    voiceSessionController.speakResponse("Action blocked: ${policyDecision.reason}")
+                    return
+                }
+                is PolicyDecision.RequiresApproval -> {
+                    val proposal = action.proposal
+                    val details = buildString {
+                        if (currentPlan.actions.size > 1) {
+                            appendLine("Action ${i + 1} of ${currentPlan.actions.size}: ${action.action.name}")
+                        }
+                        if (proposal != null) {
+                            appendLine("Command: ${proposal.command}")
+                            appendLine("Tool: ${proposal.tool}")
+                            val ws = workspaceRegistry.getActiveWorkspace()?.displayName ?: proposal.workspace
+                            appendLine("Workspace: $ws")
+                            appendLine("Risk: ${proposal.riskLevel.name}")
+                            appendLine("Reason: ${proposal.reason}")
+                        } else if (!action.rawArguments.isNullOrBlank()) {
+                            appendLine("Arguments: ${action.rawArguments}")
+                        } else {
+                            appendLine(policyDecision.promptDetails)
+                        }
+                    }.trim()
+
+                    _executionState.value = _executionState.value.copy(
+                        status = "Waiting for approval: ${action.action.name}",
+                        pendingApproval = currentPlan,
+                        pendingActionIndex = i,
+                        planToApprove = details
+                    )
+                    val approvalPrompt = JarvisSpeechFormatter.formatApprovalPrompt(currentPlan, details)
+                    voiceSessionController.onWaitingForApproval(approvalPrompt)
+                    return // Pause execution until user approves
+                }
+                is PolicyDecision.Allowed -> {
+                    // Passed safety checks, proceed to execution
+                }
             }
 
             if (action.action == CommandAction.UNKNOWN) {
@@ -296,7 +416,9 @@ class JarvisRuntime private constructor(val context: Context) {
                 _executionState.value = _executionState.value.copy(
                     status = "Select app",
                     pendingApproval = currentPlan,
-                    pendingActionIndex = i
+                    pendingActionIndex = i,
+                    ambiguousAppQuery = action.targetAppOrPerson,
+                    ambiguousAppCandidates = result.candidateTools
                 )
                 val spoken = JarvisSpeechFormatter.formatExecutionResult(currentPlan.originalText, result)
                 voiceSessionController.speakResponse(spoken)
@@ -317,7 +439,198 @@ class JarvisRuntime private constructor(val context: Context) {
             }
         }
 
-        _executionState.value = _executionState.value.copy(status = "Ready", pendingApproval = null, planToApprove = null)
+        _executionState.value = _executionState.value.copy(
+            status = "Ready",
+            pendingApproval = null,
+            pendingActionIndex = 0,
+            planToApprove = null,
+            resolvedContact = null,
+            ambiguousCandidates = null,
+            multipleDestinations = null,
+            ambiguousAppCandidates = null
+        )
+    }
+
+    fun approvePending() {
+        val plan = _executionState.value.pendingApproval ?: return
+        val index = _executionState.value.pendingActionIndex
+        val resolved = _executionState.value.resolvedContact
+
+        runtimeScope.launch {
+            executionMutex.withLock {
+                _executionState.value = _executionState.value.copy(
+                    status = "Approved. Executing...",
+                    pendingApproval = null,
+                    planToApprove = null
+                )
+
+                val isLocalOnly = settingsManager.localProcessingFlow.firstOrNull() ?: true
+                val updatedActions = plan.actions.mapIndexed { idx, act ->
+                    if (idx == index) act.copy(state = ActionExecutionState.RUNNING) else act
+                }
+                val updatedPlan = plan.copy(actions = updatedActions)
+
+                executePlanInternal(
+                    plan = updatedPlan,
+                    startIndex = index,
+                    resolvedContact = resolved,
+                    isLocalOnly = isLocalOnly,
+                    isApprovedByUser = true
+                )
+            }
+        }
+    }
+
+    fun rejectPending() {
+        val plan = _executionState.value.pendingApproval
+        val action = plan?.actions?.getOrNull(_executionState.value.pendingActionIndex) ?: PlannedAction(
+            action = CommandAction.UNKNOWN,
+            category = CommandCategory.UNKNOWN,
+            requiresApproval = false
+        )
+
+        if (plan != null) {
+            logActivity(plan.originalText, action, "Approval", ToolExecutionStatus.SKIPPED.name, "User rejected approval.")
+        }
+
+        _executionState.value = _executionState.value.copy(
+            status = "Action cancelled",
+            pendingApproval = null,
+            pendingActionIndex = 0,
+            planToApprove = null,
+            resolvedContact = null,
+            ambiguousQuery = null,
+            ambiguousCandidates = null,
+            multipleDestinations = null,
+            ambiguousAppQuery = null,
+            ambiguousAppCandidates = null,
+            permissionRationaleNeeded = null
+        )
+        voiceSessionController.speakResponse("Action cancelled.")
+    }
+
+    fun selectContactCandidate(candidate: ContactCandidate) {
+        val plan = _executionState.value.pendingApproval ?: return
+        val action = plan.actions.firstOrNull() ?: return
+        val message = action.messageOrQuery
+
+        runtimeScope.launch {
+            executionMutex.withLock {
+                val resolution = contactResolver.resolveCandidateDestinations(candidate, message)
+                _executionState.value = _executionState.value.copy(
+                    ambiguousQuery = null,
+                    ambiguousCandidates = null
+                )
+                handleContactResolution(plan, resolution)
+            }
+        }
+    }
+
+    fun selectContactDestination(destination: ContactDestination) {
+        val plan = _executionState.value.pendingApproval ?: return
+        val action = plan.actions.firstOrNull() ?: return
+        val name = _executionState.value.multipleDestinationsName ?: "Contact"
+        val message = _executionState.value.pendingMessageForDestination ?: action.messageOrQuery
+
+        runtimeScope.launch {
+            executionMutex.withLock {
+                val candidate = ContactCandidate(contactId = name, displayName = name, destinations = listOf(destination))
+                val resolution = contactResolver.resolveCandidateDestinations(candidate, message)
+                _executionState.value = _executionState.value.copy(
+                    multipleDestinationsName = null,
+                    multipleDestinations = null,
+                    pendingMessageForDestination = null
+                )
+                handleContactResolution(plan, resolution)
+            }
+        }
+    }
+
+    fun selectAppCandidate(tool: Tool) {
+        val plan = _executionState.value.pendingApproval ?: return
+        val index = _executionState.value.pendingActionIndex
+        val action = plan.actions.getOrNull(index) ?: return
+
+        runtimeScope.launch {
+            executionMutex.withLock {
+                val updatedAction = action.copy(
+                    targetAppOrPerson = tool.name,
+                    candidateTools = listOf(tool)
+                )
+                val updatedActions = plan.actions.toMutableList().apply {
+                    set(index, updatedAction)
+                }
+                val updatedPlan = plan.copy(actions = updatedActions)
+                val isLocalOnly = settingsManager.localProcessingFlow.firstOrNull() ?: true
+
+                _executionState.value = _executionState.value.copy(
+                    ambiguousAppQuery = null,
+                    ambiguousAppCandidates = null
+                )
+                executePlanInternal(updatedPlan, startIndex = index, isLocalOnly = isLocalOnly)
+            }
+        }
+    }
+
+    fun dismissPermissionRationale() {
+        _executionState.value = _executionState.value.copy(permissionRationaleNeeded = null)
+    }
+
+    fun dismissPermissionPermanentlyDenied() {
+        _executionState.value = _executionState.value.copy(permissionPermanentlyDenied = null)
+    }
+
+    fun showPermissionRationale(permType: String) {
+        _executionState.value = _executionState.value.copy(permissionRationaleNeeded = permType)
+    }
+
+    fun showPermissionPermanentlyDenied(permType: String) {
+        _executionState.value = _executionState.value.copy(permissionPermanentlyDenied = permType)
+    }
+
+    fun refreshActiveWorkspace() {
+        runtimeScope.launch {
+            val ws = workspaceRegistry.getActiveWorkspace()
+            _executionState.value = _executionState.value.copy(activeWorkspace = ws)
+        }
+    }
+
+    fun setWorkspacePath(displayName: String, path: String) {
+        runtimeScope.launch {
+            val ws = Workspace(
+                id = "ws_${System.currentTimeMillis()}",
+                displayName = displayName,
+                localPath = path
+            )
+            workspaceRegistry.setActiveWorkspace(ws)
+            refreshActiveWorkspace()
+        }
+    }
+
+    fun refreshTermuxStatus() {
+        runtimeScope.launch {
+            val status = termuxWorker.checkConnectionState()
+            _executionState.value = _executionState.value.copy(termuxStatus = status)
+        }
+    }
+
+    fun toggleToolEnabled(toolId: String, enabled: Boolean) {
+        // Toggle tool enablement
+        val currentTools = toolRegistry.tools.value
+        val disabled = currentTools.filter { if (it.id == toolId) !enabled else !it.enabled }.map { it.id }.toSet()
+        toolRegistry.updateDisabledTools(disabled)
+    }
+
+    fun updateToolPolicy(tool: Tool, policy: AccessPolicy) {
+        runtimeScope.launch {
+            toolRegistry.setToolPolicy(tool, policy)
+        }
+    }
+
+    fun updateAppPolicy(packageName: String, policy: AccessPolicy) {
+        runtimeScope.launch {
+            toolRegistry.setAppPolicy(packageName, policy)
+        }
     }
 
     private fun logActivity(userQuery: String, action: PlannedAction, details: String, status: String, resultSummary: String) {

@@ -135,6 +135,24 @@ class AndroidTermuxWorker(
         request: TermuxCommandRequest,
         isProbe: Boolean
     ): TermuxExecutionResult {
+        // 1. Static security validation: Executable whitelist & Risk level honesty check
+        if (!TermuxCommandClassifier.isExecutableAllowed(request.executablePath)) {
+            return TermuxExecutionResult(
+                status = TermuxExecutionStatus.COMMAND_REJECTED,
+                message = "Command '${request.executablePath}' is not allowed or supported."
+            )
+        }
+
+        // Independently calculate actual risk from executable + arguments
+        val calculatedActualRisk = TermuxCommandClassifier.classify(request.executablePath, request.arguments)
+        if (request.riskLevel.severity < calculatedActualRisk.severity) {
+            return TermuxExecutionResult(
+                status = TermuxExecutionStatus.COMMAND_REJECTED,
+                message = "Command rejected: Understated risk level (declared ${request.riskLevel} < actual $calculatedActualRisk)."
+            )
+        }
+
+        // 2. Runtime installation & permission checks
         if (!isProbe) {
             val connection = checkConnectionState()
             if (connection.connectionState == TermuxConnectionState.TERMUX_NOT_INSTALLED) {
@@ -155,13 +173,6 @@ class AndroidTermuxWorker(
                     message = "RUN_COMMAND permission is required for Termux execution."
                 )
             }
-        }
-
-        if (!TermuxCommandClassifier.isExecutableAllowed(request.executablePath)) {
-            return TermuxExecutionResult(
-                status = TermuxExecutionStatus.COMMAND_REJECTED,
-                message = "Command '${request.executablePath}' is not allowed or supported."
-            )
         }
 
         val startTime = System.currentTimeMillis()

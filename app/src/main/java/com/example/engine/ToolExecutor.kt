@@ -34,7 +34,7 @@ class ToolExecutor(
     private val context: Context,
     private val toolRegistry: ToolRegistry,
     private val contactResolver: ContactResolver,
-    private val termuxWorker: com.example.engine.termux.TermuxWorker = com.example.engine.termux.FakeTermuxWorker(),
+    private val termuxWorker: com.example.engine.termux.TermuxWorker = com.example.engine.termux.AndroidTermuxWorker(context),
     private val workspaceRegistry: com.example.data.workspace.WorkspaceRegistry = com.example.data.workspace.LocalWorkspaceRegistry(context)
 ) {
     suspend fun executeAction(
@@ -47,6 +47,15 @@ class ToolExecutor(
                 ToolExecutionStatus.FAILED,
                 "Local command processing is currently disabled in settings."
             )
+        }
+
+        val policyDecision = com.example.engine.policy.ExecutionPolicyGuard.evaluate(
+            action = command,
+            toolRegistry = toolRegistry,
+            isApprovedByUser = true
+        )
+        if (policyDecision is com.example.engine.policy.PolicyDecision.Blocked) {
+            return ToolExecutionResult(ToolExecutionStatus.FAILED, policyDecision.reason)
         }
 
         return when (command.action) {

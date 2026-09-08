@@ -1,5 +1,13 @@
 package com.example.engine.termux
 
+val TermuxRiskLevel.severity: Int
+    get() = when (this) {
+        TermuxRiskLevel.READ_ONLY -> 0
+        TermuxRiskLevel.MUTATING -> 1
+        TermuxRiskLevel.PUBLISHING -> 2
+        TermuxRiskLevel.DESTRUCTIVE -> 3
+    }
+
 object TermuxCommandClassifier {
 
     private val ALLOWED_EXECUTABLES = setOf(
@@ -25,10 +33,14 @@ object TermuxCommandClassifier {
 
         if (execName == "gradle" || execName == "gradlew" || execName == "./gradlew") {
             val firstArg = args.firstOrNull()?.lowercase() ?: ""
-            if (firstArg == "--version" || firstArg == "-v" || firstArg == "tasks") {
+            if (firstArg == "--version" || firstArg == "-v" || firstArg == "-h" || firstArg == "--help") {
                 return TermuxRiskLevel.READ_ONLY
             }
             return TermuxRiskLevel.MUTATING
+        }
+
+        if (execName == "find") {
+            return classifyFind(args)
         }
 
         if (execName == "pytest") {
@@ -37,17 +49,32 @@ object TermuxCommandClassifier {
 
         if (execName == "node" || execName == "python" || execName == "python3") {
             val firstArg = args.firstOrNull()?.lowercase() ?: ""
-            if (firstArg == "--version" || firstArg == "-v") {
+            if (firstArg == "--version" || firstArg == "-v" || firstArg == "-h" || firstArg == "--help") {
                 return TermuxRiskLevel.READ_ONLY
             }
             return TermuxRiskLevel.MUTATING
         }
 
-        if (execName in setOf("pwd", "whoami", "ls", "cat", "head", "tail", "grep", "find", "which")) {
+        if (execName in setOf("pwd", "whoami", "ls", "cat", "head", "tail", "grep", "which")) {
             return TermuxRiskLevel.READ_ONLY
         }
 
         return TermuxRiskLevel.MUTATING
+    }
+
+    private fun classifyFind(args: List<String>): TermuxRiskLevel {
+        if (args.any { it == "-delete" }) {
+            return TermuxRiskLevel.DESTRUCTIVE
+        }
+        val execIndex = args.indexOfFirst { it in setOf("-exec", "-execdir", "-ok", "-okdir") }
+        if (execIndex != -1) {
+            val commandAfterExec = args.drop(execIndex + 1)
+            if (commandAfterExec.any { it == "rm" || it == "rmdir" }) {
+                return TermuxRiskLevel.DESTRUCTIVE
+            }
+            return TermuxRiskLevel.MUTATING
+        }
+        return TermuxRiskLevel.READ_ONLY
     }
 
     fun classifyCommandLine(commandLine: String): TermuxRiskLevel {

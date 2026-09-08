@@ -1,5 +1,7 @@
 package com.example.engine.voice
 
+import com.example.engine.audio.AudioSessionManager
+import com.example.engine.audio.AudioSessionOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -9,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.util.concurrent.CopyOnWriteArraySet
 
 enum class VoiceSessionMode {
     IDLE,
@@ -39,11 +42,13 @@ interface VoiceSessionListener {
  * Prevents audio feedback loops by pausing/stopping speech recognition while JARVIS speaks,
  * and handles spoken response delivery according to user settings.
  *
- * Coordinates Push-To-Talk and Hands-Free continuous listening mode with clean serialized states.
+ * Coordinates Push-To-Talk and Hands-Free continuous listening mode with clean serialized states
+ * and single audio session ownership.
  */
 class VoiceSessionController(
     private val speechManager: com.example.engine.speech.SpeechManager,
-    private val voiceOutput: JarvisVoiceOutput
+    private val voiceOutput: JarvisVoiceOutput,
+    private val audioSessionManager: AudioSessionManager = AudioSessionManager()
 ) {
 
     private val controllerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -57,14 +62,7 @@ class VoiceSessionController(
 
     private var spokenResponsesEnabled = true
     private var handsFreeMode = false
-    private val listeners = java.util.concurrent.CopyOnWriteArraySet<VoiceSessionListener>()
-
-    fun setListener(listener: VoiceSessionListener?) {
-        listeners.clear()
-        if (listener != null) {
-            listeners.add(listener)
-        }
-    }
+    private val listeners = CopyOnWriteArraySet<VoiceSessionListener>()
 
     fun addListener(listener: VoiceSessionListener) {
         listeners.add(listener)
@@ -72,6 +70,13 @@ class VoiceSessionController(
 
     fun removeListener(listener: VoiceSessionListener) {
         listeners.remove(listener)
+    }
+
+    @Deprecated("Use addListener to avoid overwriting application runtime listeners", ReplaceWith("addListener(listener)"))
+    fun setListener(listener: VoiceSessionListener?) {
+        if (listener != null) {
+            listeners.add(listener)
+        }
     }
 
     fun setSpokenResponsesEnabled(enabled: Boolean) {
@@ -92,6 +97,7 @@ class VoiceSessionController(
             if (_sessionMode.value == VoiceSessionMode.HANDS_FREE) {
                 _sessionMode.value = VoiceSessionMode.IDLE
                 speechManager.stopListening()
+                audioSessionManager.releaseSession(AudioSessionOwner.SPEECH_TO_TEXT)
                 if (_state.value == VoiceSessionState.LISTENING || _state.value == VoiceSessionState.TRANSCRIBING) {
                     updateState(VoiceSessionState.IDLE)
                 }
@@ -108,6 +114,12 @@ class VoiceSessionController(
     fun startPushToTalk() {
         rearmJob?.cancel()
         voiceOutput.stop()
+        val sessionGranted = audioSessionManager.requestSession(AudioSessionOwner.SPEECH_TO_TEXT)
+        if (!sessionGranted) {
+            updateState(VoiceSessionState.ERROR)
+            listeners.forEach { it.onError("Audio resource currently in use") }
+            return
+        }
         _sessionMode.value = VoiceSessionMode.PUSH_TO_TALK
         updateState(VoiceSessionState.LISTENING)
         speechManager.startListening()
@@ -121,6 +133,12 @@ class VoiceSessionController(
         if (_sessionMode.value == VoiceSessionMode.PUSH_TO_TALK) return
         if (_state.value == VoiceSessionState.WAITING_FOR_APPROVAL) return
         if (_state.value == VoiceSessionState.SPEAKING) return
+
+        val sessionGranted = audioSessionManager.requestSession(AudioSessionOwner.SPEECH_TO_TEXT)
+        if (!sessionGranted) {
+            scheduleHandsFreeRearm(500L)
+            return
+        }
 
         _sessionMode.value = VoiceSessionMode.HANDS_FREE
         updateState(VoiceSessionState.LISTENING)
@@ -144,6 +162,7 @@ class VoiceSessionController(
     fun stopListening() {
         rearmJob?.cancel()
         speechManager.stopListening()
+        audioSessionManager.releaseSession(AudioSessionOwner.SPEECH_TO_TEXT)
         if (_state.value == VoiceSessionState.LISTENING || _state.value == VoiceSessionState.TRANSCRIBING) {
             updateState(VoiceSessionState.IDLE)
         }
@@ -173,6 +192,7 @@ class VoiceSessionController(
     fun handleSpeechState(speechState: com.example.engine.speech.SpeechState) {
         when (speechState) {
             is com.example.engine.speech.SpeechState.Ready -> {
+                audioSessionManager.releaseSession(AudioSessionOwner.SPEECH_TO_TEXT)
                 if (_state.value == VoiceSessionState.LISTENING || _state.value == VoiceSessionState.TRANSCRIBING) {
                     updateState(VoiceSessionState.IDLE)
                     if (handsFreeMode && _sessionMode.value == VoiceSessionMode.HANDS_FREE) {
@@ -187,10 +207,12 @@ class VoiceSessionController(
                 updateState(VoiceSessionState.TRANSCRIBING)
             }
             is com.example.engine.speech.SpeechState.Success -> {
+                audioSessionManager.releaseSession(AudioSessionOwner.SPEECH_TO_TEXT)
                 updateState(VoiceSessionState.PROCESSING)
                 listeners.forEach { it.onSpeechRecognized(speechState.text) }
             }
             is com.example.engine.speech.SpeechState.Error -> {
+                audioSessionManager.releaseSession(AudioSessionOwner.SPEECH_TO_TEXT)
                 if (_sessionMode.value == VoiceSessionMode.HANDS_FREE && speechState.isTransient) {
                     // Normal silence or timeout in continuous hands-free mode:
                     // Treat as a quiet listening cycle without flashing error on the UI.
@@ -208,11 +230,13 @@ class VoiceSessionController(
                 }
             }
             is com.example.engine.speech.SpeechState.PermissionRequired -> {
+                audioSessionManager.releaseSession(AudioSessionOwner.SPEECH_TO_TEXT)
                 updateState(VoiceSessionState.ERROR)
                 listeners.forEach { it.onError("Microphone permission required") }
                 _sessionMode.value = VoiceSessionMode.IDLE
             }
             is com.example.engine.speech.SpeechState.Unavailable -> {
+                audioSessionManager.releaseSession(AudioSessionOwner.SPEECH_TO_TEXT)
                 updateState(VoiceSessionState.ERROR)
                 listeners.forEach { it.onError("Speech recognition unavailable") }
                 _sessionMode.value = VoiceSessionMode.IDLE
@@ -225,6 +249,7 @@ class VoiceSessionController(
      */
     fun onWaitingForApproval(promptText: String? = null) {
         rearmJob?.cancel()
+        audioSessionManager.releaseSession(AudioSessionOwner.SPEECH_TO_TEXT)
         _sessionMode.value = VoiceSessionMode.IDLE
         updateState(VoiceSessionState.WAITING_FOR_APPROVAL)
         if (spokenResponsesEnabled && !promptText.isNullOrBlank()) {
@@ -240,6 +265,7 @@ class VoiceSessionController(
      */
     fun speakResponse(text: String, onDone: (() -> Unit)? = null) {
         rearmJob?.cancel()
+        audioSessionManager.releaseSession(AudioSessionOwner.SPEECH_TO_TEXT)
         if (!spokenResponsesEnabled) {
             onDone?.invoke()
             if (handsFreeMode && _state.value != VoiceSessionState.WAITING_FOR_APPROVAL) {
@@ -288,6 +314,7 @@ class VoiceSessionController(
     fun reset() {
         rearmJob?.cancel()
         speechManager.stopListening()
+        audioSessionManager.releaseSession(AudioSessionOwner.SPEECH_TO_TEXT)
         voiceOutput.stop()
         _sessionMode.value = VoiceSessionMode.IDLE
         updateState(VoiceSessionState.IDLE)
@@ -301,6 +328,7 @@ class VoiceSessionController(
         handsFreeMode = false
         _sessionMode.value = VoiceSessionMode.IDLE
         speechManager.destroyRecognizer()
+        audioSessionManager.resetSession()
         voiceOutput.shutdown()
         updateState(VoiceSessionState.IDLE)
     }
