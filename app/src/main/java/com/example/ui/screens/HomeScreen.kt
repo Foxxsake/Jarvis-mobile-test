@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Mic
+import com.example.ui.components.VoiceVisualizer
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Settings
@@ -459,49 +460,11 @@ fun HomeScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp, top = 16.dp)
             ) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(bottom = 16.dp)) {
-                    val isListening = uiState.isListening || uiState.voiceSessionState == com.example.engine.voice.VoiceSessionState.LISTENING
-                    val isSpeaking = uiState.voiceSessionState == com.example.engine.voice.VoiceSessionState.SPEAKING
-                    Box(
-                        modifier = Modifier
-                            .size(100.dp)
-                            .blur(24.dp)
-                            .background(
-                                if (isListening) MaterialTheme.colorScheme.primary else if (isSpeaking) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                                CircleShape
-                            )
-                    )
-                    Surface(
-                        modifier = Modifier
-                            .size(80.dp)
-                            .clickable { onMicClick() },
-                        shape = CircleShape,
-                        color = if (isListening) MaterialTheme.colorScheme.primaryContainer else if (isSpeaking) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.background,
-                        border = BorderStroke(
-                            2.dp,
-                            if (isListening) MaterialTheme.colorScheme.primary else if (isSpeaking) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-                        )
-                    ) {
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                            Box(
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .background(
-                                        if (isListening) MaterialTheme.colorScheme.primary else if (isSpeaking) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.surfaceVariant,
-                                        CircleShape
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = if (isSpeaking) Icons.AutoMirrored.Filled.VolumeUp else Icons.Default.Mic,
-                                    contentDescription = if (isSpeaking) "JARVIS speaking" else "Tap to speak",
-                                    modifier = Modifier.size(24.dp),
-                                    tint = if (isListening) MaterialTheme.colorScheme.onPrimary else if (isSpeaking) MaterialTheme.colorScheme.onSecondary else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
+                VoiceVisualizer(
+                    state = uiState.voiceSessionState,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                    onClick = onMicClick
+                )
                 Text(
                     text = when {
                         uiState.voiceSessionState == com.example.engine.voice.VoiceSessionState.LISTENING -> "Listening..."
