@@ -556,9 +556,9 @@ class JarvisRuntime private constructor(val context: Context) {
                 )
             }
             is ContactResolutionResult.NotFound -> {
-                logActivity(plan.originalText, plan.actions.first(), "Contact lookup", ToolExecutionStatus.FAILED.name, resolution.message)
+                logActivity(plan.originalText, plan.actions.first(), "Contact lookup", ToolExecutionStatus.FAILED.name, "Contact not found")
                 _executionState.value = _executionState.value.copy(status = "Contact not found")
-                voiceSessionController.speakResponse(resolution.message)
+                voiceSessionController.speakResponse("Contact not found")
             }
             is ContactResolutionResult.ProviderError -> {
                 logActivity(plan.originalText, plan.actions.first(), "Contact lookup", ToolExecutionStatus.FAILED.name, resolution.message)

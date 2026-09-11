@@ -67,7 +67,7 @@ class FakeTermuxWorker(
             TermuxConnectionState.TERMUX_PERMISSION_REQUIRED -> {
                 return TermuxExecutionResult(
                     status = TermuxExecutionStatus.PERMISSION_REQUIRED,
-                    message = "RUN_COMMAND permission is required to execute Termux actions."
+                    message = "RUN_COMMAND Permission required to execute Termux actions."
                 )
             }
             TermuxConnectionState.SETUP_REQUIRED -> {
@@ -98,9 +98,21 @@ class FakeTermuxWorker(
         customHandler?.invoke(request)?.let { return it }
 
         val execName = request.executablePath.substringAfterLast('/')
+        val actualCommand = if (execName == "sh" && request.arguments.isNotEmpty() && request.arguments[0] == "-c") {
+            request.arguments.getOrNull(1)?.split(" ")?.firstOrNull() ?: execName
+        } else {
+            execName
+        }
+        
+        val actualArgs = if (execName == "sh" && request.arguments.isNotEmpty() && request.arguments[0] == "-c") {
+            request.arguments.getOrNull(1)?.split(" ")?.drop(1) ?: emptyList()
+        } else {
+            request.arguments
+        }
+
         val startTime = System.currentTimeMillis()
 
-        return when (execName) {
+        return when (actualCommand) {
             "pwd" -> TermuxExecutionResult(
                 status = TermuxExecutionStatus.SUCCESS,
                 exitCode = 0,
@@ -118,9 +130,9 @@ class FakeTermuxWorker(
                 endTimeMillis = startTime + 10
             )
             "git" -> {
-                val arg = request.arguments.firstOrNull() ?: ""
+                val arg = actualArgs.firstOrNull() ?: ""
                 when (arg) {
-                    "--version", "-v" -> TermuxExecutionResult(
+                    "--version", "-v", "version" -> TermuxExecutionResult(
                         status = TermuxExecutionStatus.SUCCESS,
                         exitCode = 0,
                         stdout = "git version 2.43.0",
@@ -147,7 +159,7 @@ class FakeTermuxWorker(
                     else -> TermuxExecutionResult(
                         status = TermuxExecutionStatus.SUCCESS,
                         exitCode = 0,
-                        stdout = "Executed git ${request.arguments.joinToString(" ")}",
+                        stdout = "Executed git ${actualArgs.joinToString(" ")}",
                         message = "git command executed",
                         startTimeMillis = startTime,
                         endTimeMillis = startTime + 30

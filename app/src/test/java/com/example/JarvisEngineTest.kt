@@ -812,7 +812,9 @@ class JarvisEngineTest {
         val localExecutor = ToolExecutor(context, toolRegistry, contactResolver, fakeWorker)
 
         val plan = parser.parse("check git version")
+        println("DEBUG_PLAN_READONLY: ${plan.actions.first()}")
         val result = localExecutor.executeAction(plan.actions.first())
+        println("DEBUG_RESULT_READONLY: $result")
 
         assertEquals(ToolExecutionStatus.SUCCESS, result.status)
         assertTrue(result.message.contains("git version"))
@@ -831,7 +833,9 @@ class JarvisEngineTest {
         val localExecutor = ToolExecutor(context, toolRegistry, contactResolver, fakeWorker)
 
         val plan = parser.parse("check termux")
+        println("DEBUG_PLAN: ${plan.actions.first()}")
         val result = localExecutor.executeAction(plan.actions.first())
+        println("DEBUG_RESULT: $result")
 
         assertEquals(ToolExecutionStatus.PERMISSION_REQUIRED, result.status)
         assertTrue(result.message.contains("Permission required"))

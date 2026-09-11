@@ -13,7 +13,7 @@ object TermuxCommandClassifier {
     private val ALLOWED_EXECUTABLES = setOf(
         "pwd", "whoami", "ls", "node", "npm", "python", "python3", "git",
         "gradle", "gradlew", "./gradlew", "rm", "rmdir", "cat", "head", "tail",
-        "grep", "find", "which", "pytest"
+        "grep", "find", "which", "pytest", "sh"
     )
 
     fun classify(executable: String, args: List<String>): TermuxRiskLevel {

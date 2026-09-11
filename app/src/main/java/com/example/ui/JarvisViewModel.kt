@@ -255,13 +255,13 @@ class JarvisViewModel(
 
     fun refreshTools() {
         toolRegistry.refreshTools()
+    }
 
     fun refreshGeminiApiKey() {
         viewModelScope.launch {
             val key = geminiApiKey.value
             runtime.setApiKey(key)
         }
-    }
     }
 
     suspend fun probeTermuxConnection(): TermuxConnectionStatus {

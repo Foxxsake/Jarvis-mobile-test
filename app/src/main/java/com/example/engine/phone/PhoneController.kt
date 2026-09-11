@@ -15,7 +15,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.provider.AlarmClockContract
+import android.provider.AlarmClock
 import android.provider.MediaStore
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
@@ -226,11 +226,11 @@ class PhoneController(private val context: Context) {
 
     fun setAlarm(hour: Int, minute: Int, label: String?): PhoneActionResult {
         return try {
-            val intent = Intent(AlarmClockContract.ACTION_SET_ALARM).apply {
-                putExtra(AlarmClockContract.EXTRA_ALARM_HOUR, hour)
-                putExtra(AlarmClockContract.EXTRA_ALARM_MINUTES, minute)
-                putExtra(AlarmClockContract.EXTRA_MESSAGE, label ?: "JARVIS Alarm")
-                putExtra(AlarmClockContract.EXTRA_SKIP_UI, true)
+            val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+                putExtra(AlarmClock.EXTRA_HOUR, hour)
+                putExtra(AlarmClock.EXTRA_MINUTES, minute)
+                putExtra(AlarmClock.EXTRA_MESSAGE, label ?: "JARVIS Alarm")
+                putExtra(AlarmClock.EXTRA_SKIP_UI, true)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
@@ -243,10 +243,10 @@ class PhoneController(private val context: Context) {
 
     fun setTimer(durationSeconds: Int, label: String?): PhoneActionResult {
         return try {
-            val intent = Intent(AlarmClockContract.ACTION_SET_TIMER).apply {
-                putExtra(AlarmClockContract.EXTRA_LENGTH, durationSeconds)
-                putExtra(AlarmClockContract.EXTRA_MESSAGE, label ?: "JARVIS Timer")
-                putExtra(AlarmClockContract.EXTRA_SKIP_UI, true)
+            val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+                putExtra(AlarmClock.EXTRA_LENGTH, durationSeconds)
+                putExtra(AlarmClock.EXTRA_MESSAGE, label ?: "JARVIS Timer")
+                putExtra(AlarmClock.EXTRA_SKIP_UI, true)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)

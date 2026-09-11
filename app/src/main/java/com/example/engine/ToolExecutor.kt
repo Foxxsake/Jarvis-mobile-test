@@ -292,9 +292,9 @@ class ToolExecutor(
             com.example.engine.termux.TermuxExecutionStatus.SUCCESS -> {
                 val output = result.stdout.trim()
                 if (output.isBlank()) {
-                    ToolExecutionResult(ToolExecutionStatus.SUCCESS, "Project is clean. No changes detected.")
+                    ToolExecutionResult(ToolExecutionStatus.SUCCESS, "Project ${workspace.displayName} working tree clean. No changes detected.")
                 } else {
-                    ToolExecutionResult(ToolExecutionStatus.SUCCESS, "Project changes:\n${truncatePreview(output)}")
+                    ToolExecutionResult(ToolExecutionStatus.SUCCESS, "Project ${workspace.displayName} changes:\n${truncatePreview(output)}")
                 }
             }
             com.example.engine.termux.TermuxExecutionStatus.SETUP_REQUIRED -> {
@@ -341,6 +341,10 @@ class ToolExecutor(
                 context.startActivity(launchIntent)
                 return ToolExecutionResult(ToolExecutionStatus.SUCCESS, "Launched $target")
             }
+        }
+
+        if (tool == null && packageName == null) {
+            return ToolExecutionResult(ToolExecutionStatus.NOT_INSTALLED, "$target is not registered or installed on this device.")
         }
 
         if (tool != null && !tool.installedOrAvailable) {
@@ -406,11 +410,24 @@ class ToolExecutor(
             com.example.engine.termux.TermuxExecutionStatus.TIMED_OUT -> {
                 ToolExecutionResult(ToolExecutionStatus.TIMED_OUT, result.message)
             }
+            com.example.engine.termux.TermuxExecutionStatus.PERMISSION_REQUIRED -> {
+                ToolExecutionResult(ToolExecutionStatus.PERMISSION_REQUIRED, result.message)
+            }
+            com.example.engine.termux.TermuxExecutionStatus.TERMUX_NOT_INSTALLED -> {
+                ToolExecutionResult(ToolExecutionStatus.NOT_INSTALLED, result.message)
+            }
             else -> ToolExecutionResult(ToolExecutionStatus.FAILED, result.message)
         }
     }
 
     private suspend fun handleDevelopmentAction(command: PlannedAction): ToolExecutionResult {
+        if (command.action != CommandAction.RUN_COMMAND) {
+            return ToolExecutionResult(
+                ToolExecutionStatus.NOT_IMPLEMENTED,
+                "Development action ${command.action.name} is not yet implemented."
+            )
+        }
+
         val actionName = command.action.name
         val rawArgs = command.rawArguments ?: ""
 
@@ -459,6 +476,12 @@ class ToolExecutor(
             }
             com.example.engine.termux.TermuxExecutionStatus.TIMED_OUT -> {
                 ToolExecutionResult(ToolExecutionStatus.TIMED_OUT, result.message)
+            }
+            com.example.engine.termux.TermuxExecutionStatus.PERMISSION_REQUIRED -> {
+                ToolExecutionResult(ToolExecutionStatus.PERMISSION_REQUIRED, result.message)
+            }
+            com.example.engine.termux.TermuxExecutionStatus.TERMUX_NOT_INSTALLED -> {
+                ToolExecutionResult(ToolExecutionStatus.NOT_INSTALLED, result.message)
             }
             else -> ToolExecutionResult(ToolExecutionStatus.FAILED, result.message)
         }

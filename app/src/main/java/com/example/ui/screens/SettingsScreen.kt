@@ -281,8 +281,8 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
                 SettingsStatusBadgeRow(
                     label = "Brightness control",
-                    badgeText = if (android.provider.Settings.canWrite(voiceContext)) "ACTIVE" else "NEEDS PERMISSION",
-                    badgeType = if (android.provider.Settings.canWrite(voiceContext)) SettingsBadgeType.CONNECTED else SettingsBadgeType.WARNING
+                    badgeText = if (android.provider.Settings.System.canWrite(voiceContext)) "ACTIVE" else "NEEDS PERMISSION",
+                    badgeType = if (android.provider.Settings.System.canWrite(voiceContext)) SettingsBadgeType.CONNECTED else SettingsBadgeType.WARNING
                 )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
                 SettingsStatusBadgeRow(
