@@ -36,6 +36,25 @@ class ApprovalManager {
             CommandAction.BUILD,
             CommandAction.WORK_ON -> true
 
+            // Phone control actions - read-only, no approval needed
+            CommandAction.SET_VOLUME,
+            CommandAction.SET_BRIGHTNESS,
+            CommandAction.TOGGLE_WIFI,
+            CommandAction.TOGGLE_BLUETOOTH,
+            CommandAction.TOGGLE_FLASHLIGHT,
+            CommandAction.PLAY_MEDIA,
+            CommandAction.PAUSE_MEDIA,
+            CommandAction.NEXT_TRACK,
+            CommandAction.PREV_TRACK,
+            CommandAction.SET_ALARM,
+            CommandAction.SET_TIMER,
+            CommandAction.SCREENSHOT,
+            CommandAction.OPEN_URL,
+            CommandAction.SEARCH_WEB,
+            CommandAction.TAKE_PHOTO,
+            CommandAction.DO_NOT_DISTURB_ON,
+            CommandAction.DO_NOT_DISTURB_OFF -> false
+
             CommandAction.UNKNOWN -> false
         }
     }

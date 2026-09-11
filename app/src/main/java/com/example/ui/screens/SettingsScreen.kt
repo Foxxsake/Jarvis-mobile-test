@@ -12,11 +12,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.example.ui.JarvisViewModel
 import kotlinx.coroutines.launch
@@ -38,6 +41,9 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
     val spokenResponses by viewModel.spokenResponsesEnabled.collectAsState()
     val handsFree by viewModel.handsFreeEnabled.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
+    val geminiApiKey by viewModel.geminiApiKey.collectAsState()
+    var showApiKeyField by remember { mutableStateOf(false) }
+    var apiKeyInput by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
@@ -90,6 +96,62 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                 )
             }
 
+            // AI CONFIGURATION
+            SettingsSection(title = "AI CONFIGURATION") {
+                SettingsStatusBadgeRow(
+                    label = "Gemini AI fallback",
+                    badgeText = if (geminiApiKey.isNotBlank()) "CONFIGURED" else "NOT CONFIGURED",
+                    badgeType = if (geminiApiKey.isNotBlank()) SettingsBadgeType.CONNECTED else SettingsBadgeType.NOT_CONNECTED
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+
+                if (showApiKeyField) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "Enter your Gemini API key for AI-powered command understanding:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedTextField(
+                            value = apiKeyInput,
+                            onValueChange = { apiKeyInput = it },
+                            label = { Text("Gemini API Key") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        viewModel.settingsManager.setGeminiApiKey(apiKeyInput)
+                                        viewModel.refreshGeminiApiKey()
+                                    }
+                                    showApiKeyField = false
+                                    apiKeyInput = ""
+                                },
+                                enabled = apiKeyInput.isNotBlank()
+                            ) {
+                                Text("Save")
+                            }
+                            OutlinedButton(onClick = {
+                                showApiKeyField = false
+                                apiKeyInput = ""
+                            }) {
+                                Text("Cancel")
+                            }
+                        }
+                    }
+                } else {
+                    Button(onClick = {
+                        apiKeyInput = geminiApiKey
+                        showApiKeyField = true
+                    }) {
+                        Text(if (geminiApiKey.isNotBlank()) "Update API Key" else "Add Gemini API Key")
+                    }
+                }
+            }
+
             // VOICE & CONVERSATION (ACTIVE & FOUNDATIONAL)
             val voiceContext = androidx.compose.ui.platform.LocalContext.current
             val handsFreeState by viewModel.handsFreeServiceState.collectAsState()
@@ -114,349 +176,149 @@ fun SettingsScreen(viewModel: JarvisViewModel, onBack: () -> Unit) {
                 } else true
 
                 if (micGranted && notifGranted) {
-                    coroutineScope.launch {
-                        viewModel.settingsManager.setHandsFree(true)
-                        viewModel.startHandsFree(voiceContext)
-                    }
-                } else {
-                    coroutineScope.launch {
-                        viewModel.settingsManager.setHandsFree(false)
-                    }
+                    viewModel.startHandsFree(voiceContext)
                 }
             }
 
             SettingsSection(title = "VOICE & CONVERSATION") {
                 SettingsSwitchRow(
                     label = "Spoken responses",
-                    description = "JARVIS speaks command results and approval questions aloud",
+                    description = "JARVIS speaks responses aloud after executing commands",
                     checked = spokenResponses,
                     onCheckedChange = {
                         coroutineScope.launch { viewModel.settingsManager.setSpokenResponses(it) }
                     }
                 )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
-                
                 SettingsSwitchRow(
-                    label = "Hands-free JARVIS",
-                    description = "Enables foreground microphone service for continuous hands-free interaction",
-                    checked = (handsFreeState == com.example.engine.voice.handsfree.HandsFreeState.ACTIVE ||
-                            handsFreeState == com.example.engine.voice.handsfree.HandsFreeState.STARTING),
-                    onCheckedChange = { isChecked ->
-                        if (isChecked) {
-                            val hasAudioPerm = androidx.core.content.ContextCompat.checkSelfPermission(
-                                voiceContext,
-                                android.Manifest.permission.RECORD_AUDIO
-                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-
-                            val hasNotifPerm = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                                androidx.core.content.ContextCompat.checkSelfPermission(
-                                    voiceContext,
-                                    android.Manifest.permission.POST_NOTIFICATIONS
-                                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-                            } else true
-
-                            if (hasAudioPerm && hasNotifPerm) {
-                                coroutineScope.launch {
-                                    viewModel.settingsManager.setHandsFree(true)
-                                    viewModel.startHandsFree(voiceContext)
-                                }
+                    label = "Hands-free mode",
+                    description = "Continuously listen for commands without pressing the mic button",
+                    checked = handsFree,
+                    onCheckedChange = { enabled ->
+                        coroutineScope.launch { viewModel.settingsManager.setHandsFree(enabled) }
+                        if (enabled) {
+                            val allGranted = permissionsToRequest.all { perm ->
+                                androidx.core.content.ContextCompat.checkSelfPermission(voiceContext, perm) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                            }
+                            if (allGranted) {
+                                viewModel.startHandsFree(voiceContext)
                             } else {
-                                val permsToRequest = mutableListOf<String>()
-                                if (!hasAudioPerm) permsToRequest.add(android.Manifest.permission.RECORD_AUDIO)
-                                if (!hasNotifPerm && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                                    permsToRequest.add(android.Manifest.permission.POST_NOTIFICATIONS)
-                                }
-                                handsFreePermissionLauncher.launch(permsToRequest.toTypedArray())
+                                handsFreePermissionLauncher.launch(permissionsToRequest)
                             }
                         } else {
-                            coroutineScope.launch {
-                                viewModel.settingsManager.setHandsFree(false)
-                                viewModel.stopHandsFree(voiceContext)
-                            }
+                            viewModel.stopHandsFree(voiceContext)
                         }
                     }
                 )
-
-                val (badgeText, badgeType) = when (handsFreeState) {
-                    com.example.engine.voice.handsfree.HandsFreeState.ACTIVE -> "ACTIVE" to SettingsBadgeType.CONNECTED
-                    com.example.engine.voice.handsfree.HandsFreeState.STARTING -> "STARTING" to SettingsBadgeType.CONNECTED
-                    com.example.engine.voice.handsfree.HandsFreeState.PERMISSION_REQUIRED -> "MIC PERMISSION REQUIRED" to SettingsBadgeType.WARNING
-                    com.example.engine.voice.handsfree.HandsFreeState.ERROR -> "SERVICE ERROR" to SettingsBadgeType.WARNING
-                    com.example.engine.voice.handsfree.HandsFreeState.STOPPING -> "STOPPING" to SettingsBadgeType.NOT_CONNECTED
-                    com.example.engine.voice.handsfree.HandsFreeState.OFF -> "OFF" to SettingsBadgeType.NOT_CONNECTED
-                }
-
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
                 SettingsStatusBadgeRow(
-                    label = "Hands-free status",
-                    badgeText = badgeText,
-                    badgeType = badgeType
-                )
-
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                    val hasNotifPerm = androidx.core.content.ContextCompat.checkSelfPermission(
-                        voiceContext,
-                        android.Manifest.permission.POST_NOTIFICATIONS
-                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-
-                    if (!hasNotifPerm && handsFreeState == com.example.engine.voice.handsfree.HandsFreeState.ACTIVE) {
-                        Text(
-                            text = "Note: Notification permission is not granted. Status notification will not appear in the drawer.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        )
+                    label = "Wake word engine",
+                    badgeText = uiState.wakeWordStatus.name,
+                    badgeType = when (uiState.wakeWordStatus) {
+                        com.example.engine.voice.wakeword.WakeWordEngineStatus.READY -> SettingsBadgeType.CONNECTED
+                        com.example.engine.voice.wakeword.WakeWordEngineStatus.LISTENING -> SettingsBadgeType.CONNECTED
+                        com.example.engine.voice.wakeword.WakeWordEngineStatus.DISABLED -> SettingsBadgeType.NOT_CONNECTED
+                        else -> SettingsBadgeType.NOT_CONNECTED
                     }
-                }
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+                SettingsStatusBadgeRow(
+                    label = "Speaker verification",
+                    badgeText = uiState.speakerEnrollmentState.name,
+                    badgeType = when (uiState.speakerEnrollmentState) {
+                        com.example.engine.voice.speaker.SpeakerEnrollmentState.ENROLLED -> SettingsBadgeType.CONNECTED
+                        com.example.engine.voice.speaker.SpeakerEnrollmentState.NOT_ENROLLED -> SettingsBadgeType.NOT_CONNECTED
+                        else -> SettingsBadgeType.NOT_CONNECTED
+                    }
+                )
+            }
 
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+            // SPEECH RECOGNITION
+            SettingsSection(title = "SPEECH RECOGNITION") {
                 SettingsStatusBadgeRow(
-                    label = "Wake word (Keyword Spotting)",
-                    badgeText = "DISABLED (PASS 5B)",
-                    badgeType = SettingsBadgeType.NOT_CONNECTED
+                    label = "Active backend",
+                    badgeText = uiState.speechBackend.name,
+                    badgeType = SettingsBadgeType.CONNECTED
                 )
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
-                SettingsStatusBadgeRow(
-                    label = "Owner Voice Lock",
-                    badgeText = "NOT ENROLLED",
-                    badgeType = SettingsBadgeType.NOT_CONNECTED
-                )
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Speech backend", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        uiState.speechBackend.name,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Last speech error", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        uiState.lastSpeechError ?: "None",
-                        fontWeight = FontWeight.Bold,
-                        color = if (uiState.lastSpeechError == null || uiState.lastSpeechError == "None") MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.error
+                if (uiState.lastSpeechError != null) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+                    SettingsStatusBadgeRow(
+                        label = "Last error",
+                        badgeText = uiState.lastSpeechError ?: "None",
+                        badgeType = SettingsBadgeType.WARNING
                     )
                 }
             }
 
-            // TERMUX EXECUTION WORKER
-            val termux = uiState.termuxStatus
-            val context = androidx.compose.ui.platform.LocalContext.current
-
-            SettingsSection(title = "TERMUX EXECUTION WORKER") {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Installed", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        if (termux.isInstalled) "YES" else "NO",
-                        fontWeight = FontWeight.Bold,
-                        color = if (termux.isInstalled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                    )
-                }
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
-
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("RUN_COMMAND Permission", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        if (termux.isPermissionGranted) "GRANTED" else "REQUIRED",
-                        fontWeight = FontWeight.Bold,
-                        color = if (termux.isPermissionGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                    )
-                }
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
-
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("External App Execution", style = MaterialTheme.typography.bodyMedium)
-                    val (extText, extColor) = when (termux.connectionState) {
-                        com.example.engine.termux.TermuxConnectionState.READY -> "READY" to MaterialTheme.colorScheme.primary
-                        com.example.engine.termux.TermuxConnectionState.VERIFYING -> "CHECKING..." to MaterialTheme.colorScheme.secondary
-                        com.example.engine.termux.TermuxConnectionState.SETUP_REQUIRED -> "SETUP REQUIRED" to MaterialTheme.colorScheme.tertiary
-                        com.example.engine.termux.TermuxConnectionState.FAILED -> "FAILED / CALLBACK ERROR" to MaterialTheme.colorScheme.error
-                        com.example.engine.termux.TermuxConnectionState.UNVERIFIED -> "UNVERIFIED" to MaterialTheme.colorScheme.tertiary
-                        else -> "NOT READY" to MaterialTheme.colorScheme.error
-                    }
-                    Text(
-                        extText,
-                        fontWeight = FontWeight.Bold,
-                        color = extColor
-                    )
-                }
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
-
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Connection State", style = MaterialTheme.typography.bodyMedium)
-                    val (stateText, stateColor) = when (termux.connectionState) {
-                        com.example.engine.termux.TermuxConnectionState.READY -> "READY" to MaterialTheme.colorScheme.primary
-                        com.example.engine.termux.TermuxConnectionState.VERIFYING -> "CHECKING..." to MaterialTheme.colorScheme.secondary
-                        com.example.engine.termux.TermuxConnectionState.UNVERIFIED -> "UNVERIFIED" to MaterialTheme.colorScheme.tertiary
-                        com.example.engine.termux.TermuxConnectionState.SETUP_REQUIRED -> "SETUP REQUIRED" to MaterialTheme.colorScheme.tertiary
-                        com.example.engine.termux.TermuxConnectionState.TERMUX_NOT_INSTALLED -> "NOT INSTALLED" to MaterialTheme.colorScheme.error
-                        com.example.engine.termux.TermuxConnectionState.TERMUX_TOO_OLD -> "TOO OLD (<0.109)" to MaterialTheme.colorScheme.error
-                        com.example.engine.termux.TermuxConnectionState.TERMUX_PERMISSION_REQUIRED -> "PERMISSION REQUIRED" to MaterialTheme.colorScheme.error
-                        com.example.engine.termux.TermuxConnectionState.FAILED -> "FAILED" to MaterialTheme.colorScheme.error
-                    }
-                    Text(stateText, fontWeight = FontWeight.Bold, color = stateColor)
-                }
-
-                if (!termux.detailMessage.isNullOrBlank()) {
-                    Text(
-                        termux.detailMessage!!,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    )
-                }
-
-                if (termux.connectionState == com.example.engine.termux.TermuxConnectionState.SETUP_REQUIRED) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "Setup Instructions:",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        "1. Open Termux\n2. Ensure ~/.termux/termux.properties contains:\n   allow-external-apps=true\n3. Run: termux-reload-settings",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                                val clip = android.content.ClipData.newPlainText("Termux Setup", "mkdir -p ~/.termux && echo \"allow-external-apps=true\" >> ~/.termux/termux.properties && termux-reload-settings")
-                                clipboard?.setPrimaryClip(clip)
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Copy Setup Command", style = MaterialTheme.typography.labelSmall)
-                        }
-
-                        OutlinedButton(
-                            onClick = { coroutineScope.launch { viewModel.probeTermuxConnection() } },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Check Connection", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                } else {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { coroutineScope.launch { viewModel.probeTermuxConnection() } },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Check Connection", style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-
-            }
-
-            // WORKSPACE CONFIGURATION
-            val activeWs = uiState.activeWorkspace
-            var wsName by androidx.compose.runtime.remember(activeWs) { androidx.compose.runtime.mutableStateOf(activeWs?.displayName ?: "JARVIS Mobile") }
-            var wsPath by androidx.compose.runtime.remember(activeWs) { androidx.compose.runtime.mutableStateOf(activeWs?.localPath ?: "/data/data/com.termux/files/home") }
-
-            SettingsSection(title = "PROJECT WORKSPACE") {
-                Text(
-                    "Register local workspace directory for termux status and git commands:",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = wsName,
-                    onValueChange = { wsName = it },
-                    label = { Text("Display Name") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = wsPath,
-                    onValueChange = { wsPath = it },
-                    label = { Text("Local Path") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = { viewModel.setWorkspacePath(wsName, wsPath) },
-                    modifier = Modifier.align(Alignment.End)
-                ) {
-                    Text("Save Workspace")
-                }
-            }
-
-            // AI PREFERENCES (FUTURE)
-            SettingsSection(title = "AI PREFERENCES (FUTURE)") {
+            // TERMUX INTEGRATION
+            SettingsSection(title = "TERMUX INTEGRATION") {
                 SettingsStatusBadgeRow(
-                    label = "AI Mode",
-                    badgeText = "FREE_FIRST (LOCAL ONLY)",
-                    badgeType = SettingsBadgeType.NOT_IMPLEMENTED
+                    label = "Termux status",
+                    badgeText = uiState.termuxStatus.connectionState.name,
+                    badgeType = when (uiState.termuxStatus.connectionState) {
+                        com.example.engine.termux.TermuxConnectionState.READY -> SettingsBadgeType.CONNECTED
+                        com.example.engine.termux.TermuxConnectionState.TERMUX_NOT_INSTALLED -> SettingsBadgeType.NOT_CONNECTED
+                        com.example.engine.termux.TermuxConnectionState.TERMUX_PERMISSION_REQUIRED -> SettingsBadgeType.WARNING
+                        com.example.engine.termux.TermuxConnectionState.SETUP_REQUIRED -> SettingsBadgeType.WARNING
+                        else -> SettingsBadgeType.NOT_CONNECTED
+                    }
                 )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
                 SettingsStatusBadgeRow(
-                    label = "AI Providers",
-                    badgeText = "NOT IMPLEMENTED",
-                    badgeType = SettingsBadgeType.NOT_IMPLEMENTED
-                )
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
-                SettingsStatusBadgeRow(
-                    label = "Fallback order",
-                    badgeText = "NOT IMPLEMENTED",
-                    badgeType = SettingsBadgeType.NOT_IMPLEMENTED
+                    label = "Active workspace",
+                    badgeText = uiState.activeWorkspace?.displayName ?: "None configured",
+                    badgeType = if (uiState.activeWorkspace != null) SettingsBadgeType.CONNECTED else SettingsBadgeType.NOT_CONNECTED
                 )
             }
 
-            // SYSTEM INTEGRATION (FUTURE)
-            SettingsSection(title = "SYSTEM INTEGRATION (FUTURE)") {
+            // PHONE CONTROL (NEW)
+            SettingsSection(title = "PHONE CONTROL") {
                 SettingsStatusBadgeRow(
-                    label = "System overlay assistant",
-                    badgeText = "COMING LATER",
-                    badgeType = SettingsBadgeType.COMING_LATER
+                    label = "Volume control",
+                    badgeText = "ACTIVE",
+                    badgeType = SettingsBadgeType.CONNECTED
                 )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
                 SettingsStatusBadgeRow(
-                    label = "Accessibility automation",
-                    badgeText = "COMING LATER",
-                    badgeType = SettingsBadgeType.COMING_LATER
+                    label = "Brightness control",
+                    badgeText = if (android.provider.Settings.canWrite(voiceContext)) "ACTIVE" else "NEEDS PERMISSION",
+                    badgeType = if (android.provider.Settings.canWrite(voiceContext)) SettingsBadgeType.CONNECTED else SettingsBadgeType.WARNING
                 )
-            }
-
-            // EXTERNAL TOOLS (FUTURE)
-            SettingsSection(title = "EXTERNAL TOOLS") {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
                 SettingsStatusBadgeRow(
-                    label = "GitHub connection",
-                    badgeText = "NOT CONNECTED",
-                    badgeType = SettingsBadgeType.NOT_CONNECTED
+                    label = "Flashlight control",
+                    badgeText = "ACTIVE",
+                    badgeType = SettingsBadgeType.CONNECTED
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+                SettingsStatusBadgeRow(
+                    label = "Media playback",
+                    badgeText = "ACTIVE",
+                    badgeType = SettingsBadgeType.CONNECTED
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+                SettingsStatusBadgeRow(
+                    label = "Alarms & timers",
+                    badgeText = "ACTIVE",
+                    badgeType = SettingsBadgeType.CONNECTED
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+                SettingsStatusBadgeRow(
+                    label = "WiFi / Bluetooth",
+                    badgeText = "ACTIVE",
+                    badgeType = SettingsBadgeType.CONNECTED
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+                SettingsStatusBadgeRow(
+                    label = "Web search & URLs",
+                    badgeText = "ACTIVE",
+                    badgeType = SettingsBadgeType.CONNECTED
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+                SettingsStatusBadgeRow(
+                    label = "Do Not Disturb",
+                    badgeText = "ACTIVE",
+                    badgeType = SettingsBadgeType.CONNECTED
                 )
             }
         }
@@ -468,9 +330,9 @@ fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) 
     Column {
         Text(
             text = title,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.padding(bottom = 8.dp)
         )
         Surface(

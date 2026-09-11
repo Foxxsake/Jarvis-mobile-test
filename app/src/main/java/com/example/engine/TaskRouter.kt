@@ -101,6 +101,111 @@ class TaskRouter(private val toolRegistry: ToolRegistry) {
                 primaryToolId = "termux"
             )
 
+            // Phone control actions
+            CommandAction.SET_VOLUME -> {
+                val arg = command.rawArguments ?: ""
+                val desc = when (arg) {
+                    "up" -> "Increase volume"
+                    "down" -> "Decrease volume"
+                    "mute" -> "Mute audio"
+                    "unmute" -> "Unmute audio"
+                    else -> "Set volume to $arg%"
+                }
+                ExecutionPlan(steps = listOf(desc), primaryToolId = null)
+            }
+
+            CommandAction.SET_BRIGHTNESS -> {
+                val arg = command.rawArguments ?: ""
+                val desc = when (arg) {
+                    "up" -> "Increase brightness"
+                    "down" -> "Decrease brightness"
+                    else -> "Set brightness to $arg%"
+                }
+                ExecutionPlan(steps = listOf(desc), primaryToolId = null)
+            }
+
+            CommandAction.TOGGLE_WIFI -> {
+                val arg = command.rawArguments ?: "toggle"
+                ExecutionPlan(steps = listOf("Toggle WiFi ($arg)"), primaryToolId = null)
+            }
+
+            CommandAction.TOGGLE_BLUETOOTH -> {
+                val arg = command.rawArguments ?: "toggle"
+                ExecutionPlan(steps = listOf("Toggle Bluetooth ($arg)"), primaryToolId = null)
+            }
+
+            CommandAction.TOGGLE_FLASHLIGHT -> {
+                val arg = command.rawArguments ?: "toggle"
+                ExecutionPlan(steps = listOf("Toggle flashlight ($arg)"), primaryToolId = null)
+            }
+
+            CommandAction.PLAY_MEDIA -> ExecutionPlan(
+                steps = listOf("Play/resume media"),
+                primaryToolId = null
+            )
+
+            CommandAction.PAUSE_MEDIA -> ExecutionPlan(
+                steps = listOf("Pause media"),
+                primaryToolId = null
+            )
+
+            CommandAction.NEXT_TRACK -> ExecutionPlan(
+                steps = listOf("Skip to next track"),
+                primaryToolId = null
+            )
+
+            CommandAction.PREV_TRACK -> ExecutionPlan(
+                steps = listOf("Go to previous track"),
+                primaryToolId = null
+            )
+
+            CommandAction.SET_ALARM -> ExecutionPlan(
+                steps = listOf("Set alarm for ${command.rawArguments ?: "unknown time"}"),
+                primaryToolId = null
+            )
+
+            CommandAction.SET_TIMER -> {
+                val seconds = command.rawArguments?.toIntOrNull() ?: 0
+                val mins = seconds / 60
+                val secs = seconds % 60
+                val timeStr = when {
+                    mins > 0 && secs > 0 -> "${mins}m ${secs}s"
+                    mins > 0 -> "${mins}m"
+                    else -> "${secs}s"
+                }
+                ExecutionPlan(steps = listOf("Set timer for $timeStr"), primaryToolId = null)
+            }
+
+            CommandAction.SCREENSHOT -> ExecutionPlan(
+                steps = listOf("Take screenshot"),
+                primaryToolId = null
+            )
+
+            CommandAction.OPEN_URL -> ExecutionPlan(
+                steps = listOf("Open URL: ${command.rawArguments ?: "unknown URL"}"),
+                primaryToolId = null
+            )
+
+            CommandAction.SEARCH_WEB -> ExecutionPlan(
+                steps = listOf("Web search: ${command.rawArguments ?: "unknown query"}"),
+                primaryToolId = null
+            )
+
+            CommandAction.TAKE_PHOTO -> ExecutionPlan(
+                steps = listOf("Open camera to take photo"),
+                primaryToolId = null
+            )
+
+            CommandAction.DO_NOT_DISTURB_ON -> ExecutionPlan(
+                steps = listOf("Enable Do Not Disturb"),
+                primaryToolId = null
+            )
+
+            CommandAction.DO_NOT_DISTURB_OFF -> ExecutionPlan(
+                steps = listOf("Disable Do Not Disturb"),
+                primaryToolId = null
+            )
+
             CommandAction.UNKNOWN -> ExecutionPlan(
                 steps = listOf("AI planning required. (Command not understood natively)"),
                 primaryToolId = null

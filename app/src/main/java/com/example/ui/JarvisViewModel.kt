@@ -113,6 +113,10 @@ class JarvisViewModel(
 
     val handsFreeServiceState: StateFlow<HandsFreeState> = HandsFreeVoiceService.serviceState
 
+    val geminiApiKey: StateFlow<String> = this.settingsManager.geminiApiKeyFlow
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
+
     val activityLogs: StateFlow<List<ActivityLog>> = this.repository.allLogs
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -177,6 +181,13 @@ class JarvisViewModel(
                     speechBackend = diag.backend,
                     lastSpeechError = diag.lastErrorName
                 )
+            }
+        }
+
+        // Initialize Gemini AI provider with stored API key
+        viewModelScope.launch {
+            geminiApiKey.collectLatest { key ->
+                runtime.setApiKey(key)
             }
         }
     }
@@ -244,6 +255,13 @@ class JarvisViewModel(
 
     fun refreshTools() {
         toolRegistry.refreshTools()
+
+    fun refreshGeminiApiKey() {
+        viewModelScope.launch {
+            val key = geminiApiKey.value
+            runtime.setApiKey(key)
+        }
+    }
     }
 
     suspend fun probeTermuxConnection(): TermuxConnectionStatus {

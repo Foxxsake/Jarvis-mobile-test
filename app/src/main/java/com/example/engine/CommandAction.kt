@@ -15,5 +15,23 @@ enum class CommandAction {
     DELETE,
     OVERWRITE,
     RUN_COMMAND,
+    // Phone control actions
+    SET_VOLUME,
+    SET_BRIGHTNESS,
+    TOGGLE_WIFI,
+    TOGGLE_BLUETOOTH,
+    TOGGLE_FLASHLIGHT,
+    PLAY_MEDIA,
+    PAUSE_MEDIA,
+    NEXT_TRACK,
+    PREV_TRACK,
+    SET_ALARM,
+    SET_TIMER,
+    SCREENSHOT,
+    OPEN_URL,
+    SEARCH_WEB,
+    TAKE_PHOTO,
+    DO_NOT_DISTURB_ON,
+    DO_NOT_DISTURB_OFF,
     UNKNOWN
 }

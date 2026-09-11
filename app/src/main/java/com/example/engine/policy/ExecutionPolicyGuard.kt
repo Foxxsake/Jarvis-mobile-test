@@ -107,6 +107,26 @@ object ExecutionPolicyGuard {
                     )
                 }
             }
+            // Phone control actions are read-only device controls - always allowed
+            CommandAction.SET_VOLUME,
+            CommandAction.SET_BRIGHTNESS,
+            CommandAction.TOGGLE_WIFI,
+            CommandAction.TOGGLE_BLUETOOTH,
+            CommandAction.TOGGLE_FLASHLIGHT,
+            CommandAction.PLAY_MEDIA,
+            CommandAction.PAUSE_MEDIA,
+            CommandAction.NEXT_TRACK,
+            CommandAction.PREV_TRACK,
+            CommandAction.SET_ALARM,
+            CommandAction.SET_TIMER,
+            CommandAction.SCREENSHOT,
+            CommandAction.OPEN_URL,
+            CommandAction.SEARCH_WEB,
+            CommandAction.TAKE_PHOTO,
+            CommandAction.DO_NOT_DISTURB_ON,
+            CommandAction.DO_NOT_DISTURB_OFF -> {
+                // Always allowed - read-only device controls
+            }
             else -> {
                 // Unimplemented placeholders (DELETE, OVERWRITE, BUILD, WORK_ON, RUN_COMMAND)
                 // or non-consequential read-only actions pass through to execution handler

@@ -4,9 +4,9 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
-import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -21,16 +21,17 @@ class SettingsManager(val context: Context) {
         val AI_MODE = stringPreferencesKey("ai_mode")
         val SPOKEN_RESPONSES = booleanPreferencesKey("spoken_responses")
         val HANDS_FREE = booleanPreferencesKey("hands_free")
+        val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
     }
 
     val spokenResponsesFlow: Flow<Boolean> = context.dataStore.data
         .map { preferences ->
-            preferences[SPOKEN_RESPONSES] ?: true // Default ON for development testing
+            preferences[SPOKEN_RESPONSES] ?: true
         }
 
     val handsFreeFlow: Flow<Boolean> = context.dataStore.data
         .map { preferences ->
-            preferences[HANDS_FREE] ?: false // Default OFF
+            preferences[HANDS_FREE] ?: false
         }
 
     val confirmationRequiredFlow: Flow<Boolean> = context.dataStore.data
@@ -51,6 +52,11 @@ class SettingsManager(val context: Context) {
     val aiModeFlow: Flow<String> = context.dataStore.data
         .map { preferences ->
             preferences[AI_MODE] ?: "FREE_FIRST"
+        }
+
+    val geminiApiKeyFlow: Flow<String> = context.dataStore.data
+        .map { preferences ->
+            preferences[GEMINI_API_KEY] ?: ""
         }
 
     suspend fun setConfirmationRequired(enabled: Boolean) {
@@ -86,6 +92,12 @@ class SettingsManager(val context: Context) {
                 current.add(toolId)
             }
             preferences[DISABLED_TOOL_IDS] = current
+        }
+    }
+
+    suspend fun setGeminiApiKey(apiKey: String) {
+        context.dataStore.edit { preferences ->
+            preferences[GEMINI_API_KEY] = apiKey
         }
     }
 }

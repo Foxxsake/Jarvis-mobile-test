@@ -1,5 +1,6 @@
 package com.example.engine
 
+import com.example.engine.phone.PhoneCommandParser
 import com.example.engine.termux.TermuxCommandClassifier
 import com.example.engine.termux.TermuxRiskLevel
 
@@ -31,7 +32,6 @@ class CommandParser(
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return emptyList()
 
-        // Natural connectors and punctuation-based separators
         val connectorPatterns = listOf(
             Regex(";\\s*"),
             Regex("\\s+and\\s+then\\s+", RegexOption.IGNORE_CASE),
@@ -46,7 +46,6 @@ class CommandParser(
         for (pattern in connectorPatterns) {
             val matches = pattern.findAll(trimmed)
             for (match in matches) {
-                // Check if this match is inside a communication message
                 var skip = false
                 val leftOfMatch = trimmed.substring(0, match.range.first).lowercase()
                 if (leftOfMatch.contains(":")) {
@@ -71,9 +70,7 @@ class CommandParser(
                 val leftAction = parseSingle(left)
                 if (leftAction.action != CommandAction.UNKNOWN) {
                     val rightActions = trySplitActions(right)
-                    // Only split when BOTH sides parse as legitimate independent actions.
                     if (rightActions.isNotEmpty() && rightActions.none { it.action == CommandAction.UNKNOWN }) {
-                        // Check if it's multiple communication actions, which we don't support well yet
                         val allActions = listOf(leftAction) + rightActions
                         val commCount = allActions.count { it.action == CommandAction.TEXT || it.action == CommandAction.EMAIL || it.action == CommandAction.CALL }
                         if (commCount > 1) {
@@ -88,10 +85,8 @@ class CommandParser(
                         }
                         return allActions
                     } else {
-                        // If the second segment is not independently recognised, preserve it as a follow-up instead
-                        // BUT if left action is communication, DO NOT append followUp, keep the whole string as message.
                         if (leftAction.action == CommandAction.TEXT || leftAction.action == CommandAction.EMAIL || leftAction.action == CommandAction.CALL) {
-                            return listOf(parseSingle(trimmed)) // Just parse the whole thing
+                            return listOf(parseSingle(trimmed))
                         }
                         return listOf(leftAction.copy(followUp = right))
                     }
@@ -99,13 +94,18 @@ class CommandParser(
             }
         }
 
-        // If no multi-action split produces valid known actions, parse as single
         return listOf(parseSingle(trimmed))
     }
 
     fun parseSingle(text: String): PlannedAction {
         val trimmed = text.trim()
         val lower = trimmed.lowercase()
+
+        // --- Phone control commands (volume, brightness, wifi, bluetooth, flashlight, media, alarm, timer, etc.) ---
+        val phoneResult = PhoneCommandParser.parse(trimmed)
+        if (phoneResult != null) {
+            return PhoneCommandParser.toPlannedAction(phoneResult)
+        }
 
         if (lower == "open settings" || lower == "settings") {
             return PlannedAction(
@@ -164,7 +164,6 @@ class CommandParser(
             )
         }
 
-        // Check commands (diagnostics, versions, voice tool resolution)
         if (lower.startsWith("check ")) {
             val target = lower.substring(6).trim()
             when (target) {
@@ -223,7 +222,6 @@ class CommandParser(
                     )
                 }
                 else -> {
-                    // Reuse ToolCommandMatcher for voice tool fuzzy matching
                     val matchOutcome = toolMatcher.matchSingleTarget(target)
                     if (matchOutcome is ToolMatchOutcome.Success) {
                         val tool = matchOutcome.result.tool
@@ -278,7 +276,6 @@ class CommandParser(
             )
         }
 
-        // Direct command strings: git, gradle, npm
         if (lower.startsWith("git ") || lower.startsWith("npm ") || lower.startsWith("gradle ") || lower.startsWith("./gradlew ")) {
             val risk = TermuxCommandClassifier.classifyCommandLine(trimmed)
             val requiresApproval = TermuxCommandClassifier.requiresApproval(risk)
@@ -308,7 +305,7 @@ class CommandParser(
                 rawArguments = "test",
                 riskLevel = TermuxRiskLevel.MUTATING,
                 requiresApproval = true,
-                proposal = null // Will be resolved by ViewModel before approval
+                proposal = null
             )
         }
 
@@ -319,7 +316,7 @@ class CommandParser(
                 rawArguments = "build",
                 riskLevel = TermuxRiskLevel.MUTATING,
                 requiresApproval = true,
-                proposal = null // Will be resolved by ViewModel before approval
+                proposal = null
             )
         }
 
@@ -366,7 +363,7 @@ class CommandParser(
             return PlannedAction(
                 action = CommandAction.PUSH,
                 category = CommandCategory.DEVELOPMENT,
-                rawArguments = null, // Do not leave fake "code" argument
+                rawArguments = null,
                 riskLevel = TermuxRiskLevel.PUBLISHING,
                 requiresApproval = true,
                 proposal = proposal
@@ -410,7 +407,6 @@ class CommandParser(
             )
         }
 
-        // Check for app opening / natural commands
         val isOpenVerb = lower.startsWith("open ") || lower.startsWith("launch ") ||
                 lower.startsWith("start ") || lower.startsWith("go to ") ||
                 lower.startsWith("please ")
@@ -478,7 +474,6 @@ class CommandParser(
             }
         }
 
-        // Direct tool name or alias match without opening verb (e.g., "Pyroid", "Pydroid 3", "Termux")
         val directMatch = toolMatcher.match(trimmed)
         if (directMatch is ToolMatchOutcome.Success) {
             val target = if (directMatch.result.matchedTerm.equals(directMatch.result.tool.name, ignoreCase = true)) {
@@ -516,4 +511,3 @@ class CommandParser(
         )
     }
 }
-
